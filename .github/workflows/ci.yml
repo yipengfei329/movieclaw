@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一分支/PR 有新推送时取消旧的运行，节省 CI 资源
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Python：代码规范检查 + 单元测试 ─────────────────────────────────────
+  python:
+    name: Python – lint & test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 使用 astral-sh 官方 Action 安装 uv，并启用缓存加速后续运行
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: 安装依赖
+        run: uv sync --all-extras
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Ruff format 检查
+        run: uv run ruff format --check .
+
+      - name: 运行单元测试（跳过需要真实网络/Cookie 的集成测试）
+        run: uv run pytest -m "not integration"
+
+  # ── 前端：代码规范检查 + 类型检查 ────────────────────────────────────────
+  frontend:
+    name: Frontend – lint & typecheck
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      # --frozen-lockfile 确保 CI 使用锁定版本，不允许隐式更新
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: ESLint 检查
+        run: pnpm web:lint
+
+      - name: TypeScript 类型检查
+        run: pnpm web:typecheck

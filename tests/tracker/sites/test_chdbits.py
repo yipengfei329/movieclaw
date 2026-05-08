@@ -6,7 +6,8 @@
    Network → 任意请求 → Request Headers → 复制 Cookie 整行的值。
 2. 在仓库根目录的 .env 中填写::
 
-       MOVIECLAW_TEST_COOKIES_CHDBITS="c_secure_uid=...; c_secure_pass=...; c_secure_ssl=yes; c_secure_tracker_ssl=yes"
+       MOVIECLAW_TEST_COOKIES_CHDBITS="c_secure_uid=...; c_secure_pass=...;
+       c_secure_ssl=yes; c_secure_tracker_ssl=yes"
 
    .env 已在 .gitignore 中，凭据不会进 git。
 3. 运行测试::

@@ -15,6 +15,7 @@
     "web:dev": "pnpm --filter web dev",
     "web:build": "pnpm --filter web build",
     "web:lint": "pnpm --filter web lint",
-    "web:typecheck": "pnpm --filter web exec tsc --noEmit"
+    "web:typecheck": "pnpm --filter web exec tsc --noEmit",
+    "api:types": "pnpm --filter web exec openapi-typescript http://localhost:8000/openapi.json -o lib/api/schema.generated.ts"
   }
 }

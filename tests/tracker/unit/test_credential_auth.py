@@ -4,7 +4,7 @@
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import httpx
 import pytest
@@ -13,7 +13,6 @@ from movieclaw_tracker.auth import CredentialAuthProvider
 from movieclaw_tracker.exceptions import TrackerAuthError
 from movieclaw_tracker.models import AuthState
 from movieclaw_tracker.selectors import LoginSelectors
-
 
 # ---------------------------------------------------------------------------
 # 测试用 HTML 模板
