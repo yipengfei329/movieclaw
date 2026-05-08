@@ -6,7 +6,12 @@ import { publicEnv } from "@/lib/env";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: publicEnv.appName,
+  // 使用模板格式：子页面标题会自动变成 "页面名 | movieclaw console"，
+  // 根路由未指定 title 时退回 default
+  title: {
+    template: `%s | ${publicEnv.appName}`,
+    default: publicEnv.appName,
+  },
   description: "Movieclaw Web console scaffold for future multi-client expansion.",
 };
 
