@@ -185,10 +185,7 @@ class TTGSite(NexusPHPSite):
             ratio = float("inf")
         else:
             ratio_raw = _font_text(3).replace("无限", "inf")
-            if ratio_raw == "inf":
-                ratio = float("inf")
-            else:
-                ratio = self._parse_float(ratio_raw)
+            ratio = float("inf") if ratio_raw == "inf" else self._parse_float(ratio_raw)
 
         return UserProfile(
             user_id=uid,

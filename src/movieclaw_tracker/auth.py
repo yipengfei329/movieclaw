@@ -130,7 +130,7 @@ class AuthProvider(abc.ABC):
     async def check(self, client: HttpClient) -> AuthState:
         """检查当前认证状态是否有效。"""
 
-    def bind(self, *, base_url: str, login_selectors: LoginSelectors | None = None) -> None:
+    def bind(self, *, base_url: str, login_selectors: LoginSelectors | None = None) -> None:  # noqa: B027
         """由工厂函数调用，注入站点上下文（base_url、登录选择器等）。
 
         默认空操作。需要站点上下文的 Provider（如 CredentialAuthProvider）覆写此方法。
@@ -268,7 +268,8 @@ class CredentialAuthProvider(AuthProvider):
 
                 # 下载验证码图片
                 captcha_rel_url = html.unescape(captcha_match.group(1))
-                captcha_img_url = self._url(captcha_rel_url) if not captcha_rel_url.startswith(("http://", "https://")) else captcha_rel_url
+                is_absolute = captcha_rel_url.startswith(("http://", "https://"))
+                captcha_img_url = captcha_rel_url if is_absolute else self._url(captcha_rel_url)
                 img_res = await client.raw_get(captcha_img_url)
                 captcha_text = await self._captcha_solver.solve(img_res.content)
                 logger.info("验证码识别结果：%s", captcha_text)

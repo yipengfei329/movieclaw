@@ -181,8 +181,8 @@ class NexusPHPSite(BaseSite):
             downloaded=self._field_str(doc, self.selectors.profile_downloaded_css),
             ratio=ratio,
             bonus=bonus,
-            seeding_count=self._parse_int(seeding_text) or 0,
-            leeching_count=self._parse_int(leeching_text) or 0,
+            seeding_count=seeding_count or 0,
+            leeching_count=leeching_count or 0,
             join_date=None,
         )
 
@@ -190,7 +190,7 @@ class NexusPHPSite(BaseSite):
 
     def _parse_promo(
         self, row: Selector
-    ) -> tuple[float, float, "datetime | None"]:
+    ) -> tuple[float, float, datetime | None]:
         """解析单行的促销信息，返回 (下载系数, 上传系数, 截止时间)。
 
         按 promo_download_rules / promo_upload_rules 中声明的顺序逐条匹配，
@@ -235,7 +235,7 @@ class NexusPHPSite(BaseSite):
 
         return download_factor, upload_factor, deadline
 
-    def _parse_upload_time(self, row: Selector) -> "datetime | None":
+    def _parse_upload_time(self, row: Selector) -> datetime | None:
         """解析种子的发布时间。
 
         优先从 span[title] 的 title 属性取精确时间戳（页面显示 "X小时前"
