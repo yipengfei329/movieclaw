@@ -1,0 +1,34 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.python-version
+dist/
+build/
+.coverage
+htmlcov/
+
+# 环境变量
+.env
+.env.local
+.env.*.local
+
+# Node / pnpm / Next.js
+node_modules/
+.next/
+out/
+.pnpm-store/
+*.tsbuildinfo
+apps/web/.env.local
+apps/web/.env.production.local
+apps/web/.env.development.local
+
+# 编辑器与本地工具
+.idea/
+.vscode/
+.DS_Store
+.claude/settings.local.json
+.codex/

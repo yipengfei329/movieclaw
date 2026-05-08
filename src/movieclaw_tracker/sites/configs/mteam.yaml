@@ -1,0 +1,5 @@
+site_id: mteam
+display_name: M-Team
+base_url: https://api.m-team.cc
+framework: api
+custom_class: movieclaw_tracker.sites.custom.mteam.MTeamSite

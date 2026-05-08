@@ -1,0 +1,91 @@
+# 不可说（Spring Sunday / SSD）站点配置
+# 官网：https://springsunday.net/
+
+site_id: ssd
+display_name: 不可说
+base_url: https://springsunday.net
+framework: nexusphp
+
+selectors:
+  # ── 种子列表 ─────────────────────────────────────────────────────
+  # 行结构与 chdbits 相同：tr 内嵌 table.torrentname
+  torrent_row_css: "table.torrents > tr:has(table.torrentname)"
+
+  # 分类 ID 同样来自 ?cat=XXX 链接，_extract_category_id 正则可直接提取数字
+  torrent_category_css: "a[href^='?cat=']::attr(href)"
+
+  # SSD 的副标题（中文描述）在 torrent-smalldescr 最后一个无 class 的 span 里
+  # 而 title（英文完整名）来自 <a title="..."> 属性，由框架层自动优先读取
+  torrent_subtitle_css: "div.torrent-smalldescr > span:not([class])"
+
+  # SSD 的数据列前置列数量不固定，用 nth-last-child 倒数定位更可靠
+  # 不带 ::text，由框架递归取嵌套文本（数字可能在 <a>/<b> 中）
+  torrent_size_css: "td.rowfollow:nth-last-child(5)"
+  torrent_seeders_css: "td.rowfollow:nth-last-child(4)"
+  torrent_leechers_css: "td.rowfollow:nth-last-child(3)"
+  torrent_snatched_css: "td.rowfollow:nth-last-child(2)"
+
+  # 上传者用户名在 span.Uploader_Name 里（如 <span class="UserClass_Name Uploader_Name">Miralia</span>）
+  torrent_uploader_css: "span.Uploader_Name"
+
+  # 发布时间：span[title] 的 title 属性存精确时间戳
+  torrent_time_css: "td.rowfollow:nth-last-child(6) > span[title]::attr(title)"
+  # 回退：没有 span 时，日期直接在 td 文本里
+  torrent_time_fallback_css: "td.rowfollow:nth-last-child(6)"
+
+  # ── 登录验证 ──────────────────────────────────────────────────────
+  # SSD 分页从 0 开始（?page=0 是第一页），发送时需减 1
+  page_offset: -1
+
+  # 精确匹配 logout.php 开头（默认是 href*='logout' 模糊匹配，这里更精确）
+  login_success_css: "a[href^='logout.php']"
+
+  # ── 促销 ──────────────────────────────────────────────────────────
+  # SSD 使用 span.torrent-pro-* 而非标准 NexusPHP 的 img.pro_*
+  # 格式: "CSS 选择器": 下载/上传系数（第一条命中即生效）
+  promo_download_rules:
+    "span.torrent-pro-free": 0
+    "span.torrent-pro-free2up": 0
+    "span.torrent-pro-50pctdown": 0.5
+    "span.torrent-pro-50pctdown2up": 0.5
+    "span.torrent-pro-30pctdown": 0.3
+  promo_upload_rules:
+    "span.torrent-pro-free2up": 2
+    "span.torrent-pro-50pctdown2up": 2
+    "span.torrent-pro-2up": 2
+  # 截止时间：紧跟在 pro-free span 后面的限时说明，内嵌 span 的 title 属性
+  # HTML: <span class="torrent-pro-free">Free</span>
+  #       <span style="...">(限时<span title="2026-03-26 10:57:31">22时15分</span>)</span>
+  torrent_promo_deadline_css: "span.torrent-pro-free ~ span > span[title]"
+  torrent_promo_deadline_attr: "title"
+
+  # ── 用户资料 ──────────────────────────────────────────────────────
+  # SSD 用户信息位于每页顶部导航栏 div#info_block 中。
+  # HTML 结构示例：
+  #   <a href="userdetails.php?id=12345" class="User_Elite">Username</a>
+  #   上传量：<font class="color_uploaded"></font>114.5 GB
+  #   下载量：<font class="color_downloaded"></font>50.0 GB
+  #   分享率：<font class="color_ratio"></font>2.31
+  #   <img alt="Torrents seeding"> <span>42</span>
+  #
+  # font.color_* 元素本身为空，实际值是其后紧跟的文本节点兄弟，
+  # 须用 ::next_sibling_text 伪元素（XPath following-sibling::text()[1]）提取。
+  profile_uid_css: "a[href^='userdetails.php?id=']::attr(href)"
+  profile_username_css: "a[href^='userdetails.php?id=']"
+  # 用户等级编码在导航栏用户链接的 class 属性中（如 "User_Elite"）
+  profile_class_css: "a[href^='userdetails.php?id=']::attr(class)"
+  profile_uploaded_css: "font.color_uploaded::next_sibling_text"
+  profile_downloaded_css: "font.color_downloaded::next_sibling_text"
+  profile_ratio_css: "font.color_ratio::next_sibling_text"
+  profile_seeding_css: "img[alt='Torrents seeding'] + *"
+  profile_leeching_css: "img[alt='Torrents leeching'] + *"
+  profile_vip_css: "a[class^='VIP']"
+
+# ── 分类映射 ──────────────────────────────────────────────────────
+categories:
+  movie:       [501]
+  tv:          [502, 505, 506]   # TV Series / TV Shows / Sports
+  documentary: [503]
+  anime:       [504]
+  music:       [507, 508]        # MV / Music
+  other:       [509]

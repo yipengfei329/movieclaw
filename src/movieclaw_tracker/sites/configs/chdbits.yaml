@@ -1,0 +1,52 @@
+# 彩虹岛（CHDBits）站点配置
+# 官网：https://chdbits.co/
+
+site_id: chdbits
+display_name: 彩虹岛
+base_url: https://chdbits.co
+framework: nexusphp
+
+selectors:
+  # ── 种子列表 ─────────────────────────────────────────────────────
+  # 彩虹岛的行结构是 tr > td > table.torrentname，用 :has() 精准匹配数据行
+  torrent_row_css: "table.torrents > tr:has(table.torrentname)"
+
+  # 分类 ID 来自分类链接的 cat 参数（?cat=401），而非图片 class
+  # _extract_category_id 会用正则提取其中的数字
+  torrent_category_css: "a[href^='?cat=']::attr(href)"
+
+  # 副标题放在 font.subtitle 下，直接取其文本（含 div 内的标签文本）
+  torrent_subtitle_css: "font.subtitle"
+
+  # ── 促销 ──────────────────────────────────────────────────────────
+  # 彩虹岛使用标准 NexusPHP img.pro_* 类名，下载/上传系数规则沿用默认值
+  # 截止时间在 td.embedded 内的 span[title] 属性中
+  torrent_promo_deadline_css: "td.embedded > span[title]"
+  torrent_promo_deadline_attr: "title"
+
+  # ── 登录验证 ──────────────────────────────────────────────────────
+  # 登录成功后页面中存在精确匹配 logout.php 的退出链接
+  login_success_css: "a[href='logout.php']"
+
+  # ── 用户资料 ──────────────────────────────────────────────────────
+  # 彩虹岛 userdetails 页面使用英文标签，以下选择器按实际页面结构适配
+  # 注：若解析结果为空，可能需要根据实际 HTML 进一步调整
+  profile_username_css: "a[href^='userdetails.php?id=']"
+  profile_uploaded_css: "font.color_uploaded"
+  profile_downloaded_css: "font.color_downloaded"
+  profile_ratio_css: "font.color_ratio"
+  # seeding / leeching 计数紧跟在图片后面，用 + * 取下一个元素的文本
+  profile_seeding_css: "img[alt='Torrents seeding'] + *"
+  profile_leeching_css: "img[alt='Torrents leeching'] + *"
+  # VIP 用户组：用户名链接的 class 以 VIP 开头
+  profile_vip_css: "a[class^='VIP']"
+
+# ── 分类映射 ──────────────────────────────────────────────────────
+# 将彩虹岛的站点分类 ID 映射到应用级 TorrentCategory 枚举
+categories:
+  movie:       [401]
+  tv:          [402, 403, 407]   # TV Series / TV Shows / Sports
+  documentary: [404]
+  anime:       [405]
+  music:       [406, 408]        # Music Videos / HQ Audio
+  other:       [409]

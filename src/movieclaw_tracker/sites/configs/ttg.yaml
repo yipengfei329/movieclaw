@@ -1,0 +1,91 @@
+# 听听歌（TTG / ToTheGlory.im）站点配置
+# 官网：https://totheglory.im/
+#
+# TTG 与标准 NexusPHP 的主要差异（详见 sites/custom/ttg.py）：
+#   1. 分类 ID 为中文字符串（img[alt] 属性），而非数字
+#   2. 搜索使用 search_field 单参数，分类过滤内嵌在关键词字段中
+#   3. 做种数/下载数共享同一个 td（格式 "X/Y"）
+#   4. 种子 ID 从 URL 路径（/t/12345）提取，而非 ?id= 查询参数
+#   5. 促销截止时间格式为中文日期（如 "2026年4月1日10点30分"）
+#   6. 用户资料位于 rules.php，通过 font 元素索引定位各数据字段
+
+site_id: ttg
+display_name: 听听歌
+base_url: https://totheglory.im
+framework: nexusphp
+custom_class: movieclaw_tracker.sites.custom.ttg.TTGSite
+
+selectors:
+  # ── 登录验证 ──────────────────────────────────────────────────────
+  # TTG 登出链接路径为 /logout.php，需精确匹配（默认模糊匹配 href*='logout'）
+  login_success_css: "a[href='/logout.php']"
+
+  # ── 种子列表 & 搜索 ────────────────────────────────────────────────
+  # TTG 的种子浏览页和搜索页均为 browse.php
+  torrent_list_path: "browse.php"
+  search_path: "browse.php"
+
+  # TTG 种子行：table#torrent_table 内有 id 属性的 tr（无 id 的是表头行）
+  torrent_row_css: "table#torrent_table > tr[id]"
+
+  # 发布时间：直接存放在 td:nth-child(5) 文本中，格式为 "%Y-%m-%d%H:%M:%S"
+  # （日期与时间之间没有空格，与标准格式不同）
+  torrent_time_css: "td:nth-child(5)::text"
+  torrent_time_fallback_css: ""
+  torrent_time_fmt: "%Y-%m-%d%H:%M:%S"
+
+  # ── 促销 ──────────────────────────────────────────────────────────
+  # TTG 通过 img[alt] 属性标记促销类型，与标准 NexusPHP 的 img.pro_* 不同
+  promo_download_rules:
+    'img[alt="free"]': 0
+    'img[alt="50%"]': 0.5
+    'img[alt="30%"]': 0.3
+  promo_upload_rules:
+    'img[alt="200%"]': 2
+
+  # 促销截止时间：从 span[onclick] 的 onclick 属性中提取中文日期
+  # 示例 onclick 值（推测）："countdown(ts,'2026年4月1日10点30分')"
+  torrent_promo_deadline_css: "span[onclick]"
+  torrent_promo_deadline_attr: "onclick"
+  torrent_promo_deadline_re: '\d+年\d+月\d+日\d+点\d+分'
+  torrent_promo_deadline_fmt: "%Y年%m月%d日%H点%M分"
+
+# ── 分类映射 ──────────────────────────────────────────────────────
+# TTG 分类 ID 为中文字符串（种子列表 img[alt] 属性值），不是数字
+categories:
+  movie:
+    - "电影DVDRip"
+    - "电影720p"
+    - "电影1080i/p"
+    - "BluRay原盘"
+    - "影视2160p"
+    - "UHD原盘"
+    - "iPhone/iPad视频"
+  documentary:
+    - "纪录片720p"
+    - "纪录片1080i/p"
+    - "纪录片BluRay原盘"
+  tv:
+    - "欧美剧720p"
+    - "欧美剧1080i/p"
+    - "高清日剧"
+    - "大陆港台剧720p"
+    - "高清韩剧"
+    - "大陆港台剧1080i/p"
+    - "欧美剧包"
+    - "日剧包"
+    - "华语剧包"
+    - "韩剧包"
+    - "高清体育节目"
+    - "韩国综艺"
+    - "日本综艺"
+    - "高清综艺"
+  music:
+    - "(电影原声&Game)OST"
+    - "无损音乐FLAC&APE"
+    - "MV&演唱会"
+    - "补充音轨"
+  anime:
+    - "高清动漫"
+  other:
+    - "MiniVideo"
