@@ -37,7 +37,9 @@ SOURCES: tuple[str, ...] = ("title", "subtitle")
 # - series  分集连续作品（电视剧、剧集、综艺、番剧、多集合集）
 # - other   非影视内容（软件/音乐/体育/游戏/电子书/MV）——与"负样本无 span"一致
 # 顺序即 class id 顺序，追加新类只能放末尾（保持旧 id 稳定）
-MEDIA_TYPES: tuple[str, ...] = ("movie", "series", "other")
+# collection 追加在末尾保持旧 id 稳定（v10 新增）：多部独立作品的打包
+# （"六部合集"、导演电影合集、系列全集）；单一作品的多季/全集打包仍是 series
+MEDIA_TYPES: tuple[str, ...] = ("movie", "series", "other", "collection")
 MEDIA_TYPE2ID: dict[str, int] = {name: i for i, name in enumerate(MEDIA_TYPES)}
 MEDIA_TYPE_ID2NAME: dict[int, str] = {i: name for i, name in enumerate(MEDIA_TYPES)}
 
