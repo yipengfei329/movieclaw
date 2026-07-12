@@ -107,7 +107,8 @@ def main() -> None:
     parser.add_argument("--data", default="ml/data/labeled/annotations.jsonl")
     parser.add_argument("--base", default="hfl/minirbt-h256", help="基座模型")
     parser.add_argument("--out", default="ml/artifacts/torrent-ner", help="输出目录")
-    parser.add_argument("--epochs", type=int, default=5)
+    # 12 轮实证：5 轮明显欠拟合（dev F1 0.73），12 轮 0.87 且未见过拟合迹象
+    parser.add_argument("--epochs", type=int, default=12)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=5e-5)
     args = parser.parse_args()

@@ -25,7 +25,6 @@ import onnxruntime as ort
 from transformers import AutoTokenizer
 
 from torrent_ner.dataio import load_split
-from torrent_ner.encoding import spans_from_char_tags
 from torrent_ner.labels import CONTENT_TYPES, FIELDS, ID2LABEL, MAX_LENGTH, MEDIA_TYPES
 
 
@@ -47,25 +46,32 @@ def predict(session, tokenizer, title: str, subtitle: str) -> tuple[set, str, st
     span_logits, media_logits, content_logits = session.run(None, inputs)
     pred_ids = span_logits[0].argmax(axis=-1)
 
-    # token 预测投影回字符级标签，再解码成 span（与训练对齐逻辑互逆）
-    texts = (title, subtitle or " ")
-    char_tags = [["O"] * len(texts[0]), ["O"] * len(texts[1])]
+    # token 级解码：实体 = 连续的 B-/I- token 段，字符区间取首 token 起点到
+    # 末 token 终点。不能走"逐字符涂色再解码"——空格不属于任何 token，会在
+    # 字符层留下 O 空洞，把 "Prehistoric Planet" 这类含空格实体拦腰切断。
+    # I- 接不上前段（非法 BIO）时按新实体起点处理，与线上确定性修复策略一致。
+    sources = ("title", "subtitle")
     offsets = enc["offset_mapping"][0]
+    spans = set()
+    runs: list[list] = []
+    current = None  # [seq_id, field, char_start, char_end]
     for i, seq_id in enumerate(enc.sequence_ids(0)):
-        if seq_id is None:
-            continue
         start, end = int(offsets[i][0]), int(offsets[i][1])
+        if seq_id is None or start == end:
+            current = None
+            continue
         tag = ID2LABEL[int(pred_ids[i])]
         if tag == "O":
+            current = None
             continue
         field = tag[2:]
-        for pos in range(start, min(end, len(char_tags[seq_id]))):
-            char_tags[seq_id][pos] = f"B-{field}" if pos == start and tag.startswith("B-") else f"I-{field}"
-
-    spans = set()
-    for seq_id, source in enumerate(("title", "subtitle")):
-        for field, start, end in spans_from_char_tags(char_tags[seq_id]):
-            spans.add((source, field, start, end))
+        if tag.startswith("I-") and current and current[0] == seq_id and current[1] == field:
+            current[3] = end
+        else:
+            current = [seq_id, field, start, end]
+            runs.append(current)
+    for seq_id, field, start, end in runs:
+        spans.add((sources[seq_id], field, start, end))
     return (
         spans,
         MEDIA_TYPES[int(media_logits[0].argmax())],
