@@ -24,7 +24,7 @@ from transformers import (
     TrainingArguments,
 )
 
-from torrent_ner.dataio import load_split
+from torrent_ner.dataio import load_split, read_jsonl
 from torrent_ner.encoding import build_char_tags, token_label_ids
 from torrent_ner.labels import CONTENT_TYPE2ID, ID2LABEL, MAX_LENGTH, MEDIA_TYPE2ID
 from torrent_ner.model import TorrentNerModel
@@ -109,12 +109,14 @@ def main() -> None:
     # 片名两轴显著领先 minirbt（TITLE_ZH +3.4），3.3ms/15.6MB 仍远在预算内
     parser.add_argument("--base", default="hfl/chinese-lert-small", help="基座模型")
     parser.add_argument("--out", default="ml/artifacts/torrent-ner", help="输出目录")
-    # 12 轮实证：5 轮明显欠拟合（dev F1 0.73），12 轮 0.87 且未见过拟合迹象
-    parser.add_argument("--epochs", type=int, default=12)
+    # 轮数实证：5 轮欠拟合（0.73）→12 轮 0.87→15 轮 0.92 且回归组边界更稳（6/7 vs 4/7）
+    parser.add_argument("--epochs", type=int, default=15)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--train-fraction", type=float, default=1.0,
                         help="只用训练集的前 N 比例（学习曲线实验用，dev/test 不动）")
+    parser.add_argument("--extra-train", default="ml/data/labeled/augmented.jsonl",
+                        help="额外并入训练集的样本（合成增强等，绝不进 dev/test；不存在则跳过）")
     args = parser.parse_args()
 
     tokenizer = AutoTokenizer.from_pretrained(args.base)
@@ -129,6 +131,10 @@ def main() -> None:
         _random.Random(42).shuffle(train_items)
         train_items = train_items[: int(len(train_items) * args.train_fraction)]
         print(f"学习曲线模式：只用 {args.train_fraction:.0%} 训练数据（{len(train_items)} 条）")
+    if args.extra_train and Path(args.extra_train).exists():
+        extra = [r for r in read_jsonl(args.extra_train) if not r.get("review")]
+        train_items = train_items + extra
+        print(f"并入额外训练样本 {len(extra)} 条（{args.extra_train}，只进训练集）")
     quarantined = len(load_split(args.data, "train")) - len(train_items)
     print(f"训练集 {len(train_items)} 条 / 开发集 {len(dev_items)} 条（测试集留给 evaluate.py）")
     if quarantined:

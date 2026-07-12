@@ -49,8 +49,13 @@ def validate_item(item: dict) -> list[str]:
             # 接受单年 "2025" 或年份区间 "2009-2010"（合集写法，下游取起始年）
             text = texts[source][start:end]
             years = re.split(r"[-~–—]", text)  # 含 en/em dash：站点年份区间写法不统一
-            # 下限 1895（电影诞生年）：默片老片在 PT 站真实存在（实测 1920-1929 多条）
-            if not all(y.isdigit() and 1895 <= int(y) <= 2049 for y in years) or len(years) > 2:
+            # 下限 1895（电影诞生年）：默片老片在 PT 站真实存在（实测 1920-1929 多条）；
+            # 区间尾部允许两位数简写（"2001-02" 即 2001~2002）
+            valid = all(
+                (y.isdigit() and 1895 <= int(y) <= 2049) or (i > 0 and y.isdigit() and len(y) == 2)
+                for i, y in enumerate(years)
+            )
+            if not valid or len(years) > 2:
                 problems.append(f"YEAR 值可疑: {text!r}")
     return problems
 
