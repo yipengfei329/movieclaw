@@ -238,6 +238,8 @@ def extract_with_model(title: str, subtitle: str = "") -> dict[str, object]:
             before = source[start - 1] if start > 0 else ""
             after = source[end] if end < len(source) else ""
             if _CJK_RE.match(before) or (after and after in "期集话話回季"):
+                # 守卫否决必须可观测：怀疑误杀时开 DEBUG 日志核对
+                logger.debug("YEAR 守卫否决 %r（前=%r 后=%r）", source[start:end], before, after)
                 continue
         text = source[start:end].strip()
         if text and text not in by_field.setdefault(field, []):
