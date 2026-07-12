@@ -105,7 +105,9 @@ def make_compute_metrics():
 def main() -> None:
     parser = argparse.ArgumentParser(description="微调 torrent NER 多任务模型")
     parser.add_argument("--data", default="ml/data/labeled/annotations.jsonl")
-    parser.add_argument("--base", default="hfl/minirbt-h256", help="基座模型")
+    # 基座对决实证（15k 数据，见 README）：lert-small NER 宏 F1 0.921 居首，
+    # 片名两轴显著领先 minirbt（TITLE_ZH +3.4），3.3ms/15.6MB 仍远在预算内
+    parser.add_argument("--base", default="hfl/chinese-lert-small", help="基座模型")
     parser.add_argument("--out", default="ml/artifacts/torrent-ner", help="输出目录")
     # 12 轮实证：5 轮明显欠拟合（dev F1 0.73），12 轮 0.87 且未见过拟合迹象
     parser.add_argument("--epochs", type=int, default=12)

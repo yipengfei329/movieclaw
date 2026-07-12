@@ -93,34 +93,51 @@ def cmd_parse(args) -> None:
 
 
 def cmd_judge(args) -> None:
-    """LLM 裁判逐字段验证（断点续判，与 annotate 相同的稳定性语义）。"""
+    """LLM 裁判逐字段验证（断点续判 + 线程池并发，稳定性语义与 annotate 一致）。"""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     call_model = ENGINES[args.engine]
     out = Path(VERDICT_TMPL.format(engine=args.engine))
     done = {r["id"] for r in read_jsonl(out)} if out.exists() else set()
     todo = [r for r in read_jsonl(PARSES) if r["id"] not in done]
-    print(f"待裁判 {len(todo)} 条（已完成 {len(done)} 条），裁判 {args.engine}")
+    batches = [todo[i : i + args.batch] for i in range(0, len(todo), args.batch)]
+    print(f"待裁判 {len(todo)} 条（已完成 {len(done)} 条），裁判 {args.engine}，并行 {args.workers}")
 
-    failures = 0
-    for i in range(0, len(todo), args.batch):
-        batch = todo[i : i + args.batch]
+    write_lock = threading.Lock()
+    stop = threading.Event()
+    state = {"done": 0, "fail_streak": 0}
+
+    def process(batch: list[dict]) -> None:
+        if stop.is_set():
+            return
         payload = json.dumps(batch, ensure_ascii=False, indent=1)
         try:
             verdicts = parse_json_array(call_model(JUDGE_PROMPT + payload, None))
-        except Exception as exc:  # 与 annotate 同理：跳过可重跑，连续失败熔断
-            failures += 1
-            print(f"批次失败({failures}): {str(exc)[:200]}")
-            if failures >= 3:
-                sys.exit("连续失败熔断，修复后重跑自动续接")
-            continue
-        failures = 0
+        except Exception as exc:  # 跳过可重跑，连续失败熔断
+            with write_lock:
+                state["fail_streak"] += 1
+                print(f"批次失败({state['fail_streak']}): {str(exc)[:200]}")
+                if state["fail_streak"] >= 3:
+                    stop.set()
+            return
         by_id = {v.get("id"): v for v in verdicts if isinstance(v, dict)}
         rows = [
             {"id": r["id"], "verdicts": by_id[r["id"]].get("verdicts", {}),
              "note": by_id[r["id"]].get("note", "")}
             for r in batch if r["id"] in by_id
         ]
-        append_jsonl(out, rows)
-        print(f"进度 {min(i + args.batch, len(todo))}/{len(todo)}")
+        with write_lock:
+            state["fail_streak"] = 0
+            append_jsonl(out, rows)
+            state["done"] += len(batch)
+            print(f"进度 {state['done']}/{len(todo)}")
+
+    with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
+        for future in as_completed([pool.submit(process, b) for b in batches]):
+            future.result()
+    if stop.is_set():
+        sys.exit("连续失败熔断，修复后重跑自动续接")
     print(f"完成 → {out}")
 
 
@@ -177,6 +194,7 @@ def main() -> None:
     p = sub.add_parser("judge")
     p.add_argument("--engine", choices=sorted(ENGINES), required=True)
     p.add_argument("--batch", type=int, default=10)
+    p.add_argument("--workers", type=int, default=4, help="并行批次数")
     p.set_defaults(func=cmd_judge)
 
     p = sub.add_parser("report")

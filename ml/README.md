@@ -9,7 +9,7 @@
 | 决策点 | 结论 |
 |--------|------|
 | 任务形式 | **多任务单模型**：共享编码器 + 三个头 ①token BIO 序列标注（NER）②序列分类 media_type ③序列分类 content_type。均判别式，不用生成式模型 |
-| 基座模型 | `hfl/minirbt-h256`（10.4M 参数），备选 `hfl/chinese-electra-180g-small-discriminator`，A/B 定夺 |
+| 基座模型 | `hfl/chinese-lert-small`（15k 数据六模型对决胜出：NER 宏 F1 0.921，片名两轴领先 minirbt 2-3 分；int8 15.6MB / p50 3.3ms)。对决记录：minirbt-h256 0.909/1.7ms、h288 0.918/2.0ms、electra-small 0.895、rbt3 0.905（偏科：集数强片名弱）、roberta-wwm-ext fp32≈0.95 为天花板但 26.8ms 且 **int8 动态量化崩塌**（大基座须量化校准/QAT） |
 | 输入 | 双段编码 `(title, subtitle)`，max_length=256 —— 两段互证是年份消歧的关键 |
 | span 标签 | BIO × {TITLE_ZH, TITLE_EN, YEAR, SEASON, EPISODE, EPISODE_TOTAL} + O，共 13 类，见 [torrent_ner/labels.py](torrent_ner/labels.py) |
 | 整条分类（两条正交轴） | 结构轴 media_type ∈ {movie, series, other}（"电影还是剧集"）；内容轴 content_type ∈ {anime, documentary, variety, music, other}（只标特殊题材，普通真人影视归 other）。两轴独立，"动漫剧场版"=movie+anime、"纯音频专辑"=other+music、"演唱会蓝光"=movie+music，永不塌缩 |
