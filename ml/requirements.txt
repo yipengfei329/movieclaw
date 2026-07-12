@@ -1,0 +1,13 @@
+# 训练环境依赖（独立于主项目，只在训练/导出/评估时需要）。
+# 数据管线（sample/annotate/validate）零依赖，主项目环境即可运行。
+#
+# 安装（国内走清华镜像）：
+#   cd ml && python3 -m venv .venv && source .venv/bin/activate
+#   pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+torch>=2.4,<3
+transformers>=4.46,<5
+# Trainer 的硬依赖（transformers 不自动带上）
+accelerate>=0.26,<2
+seqeval>=1.2,<2
+optimum[onnxruntime]>=1.23,<2
+onnxruntime>=1.19,<2
