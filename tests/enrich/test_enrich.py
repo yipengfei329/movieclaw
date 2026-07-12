@@ -124,6 +124,18 @@ class TestChinesePT:
         assert a.year is None
         assert a.episodes == list(range(1, 21))
 
+    def test_year_at_end_of_subtitle(self):
+        # 线上真实病例（v4 修复）：年份在副标题末尾时曾被"后跟量词"守卫误杀
+        # （空串 in "期集话回季" 恒真），且 "金部长" 的模型碎片 '金'/'长' 混入别名
+        a = enrich(
+            "Agent Kim Reactivated S01E03 1080p NF WEB-DL AAC 2.0 H.264-SCOPE",
+            "金特务：本色回归 [第一季 第03集] / 金部长 / Agent Kim | 类型：剧情 动作 | 2026",
+        )
+        assert a.year == 2026
+        assert a.seasons == [1] and a.episodes == [3]
+        assert "金特务：本色回归" in a.titles_zh
+        assert all(len(t) > 1 for t in a.titles_zh)  # 单字碎片不得混入
+
     def test_variety_show_issue_number_not_year(self):
         # 综艺的「第2024期」既不是年份也不该当成集号
         a = enrich("大侦探 第2024期 4K WEB-DL", "芒果TV 全网首播")

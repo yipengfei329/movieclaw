@@ -232,20 +232,26 @@ def extract_with_model(title: str, subtitle: str = "") -> dict[str, object]:
                 end += 1
         if field == "YEAR":
             # 老规则的两条实证守卫，作为模型输出的确定性护栏保留：
-            # 紧贴 CJK 的数字是片名一部分（请回答1988）；跟量词的是期号/集号
+            # 紧贴 CJK 的数字是片名一部分（请回答1988）；跟量词的是期号/集号。
+            # after 必须非空才做量词判断——空串是任何字符串的子串，不加这个
+            # 条件会把位于文本末尾的年份全部误杀（"... | 2026"）
             before = source[start - 1] if start > 0 else ""
             after = source[end] if end < len(source) else ""
-            if _CJK_RE.match(before) or after in "期集话話回季":
+            if _CJK_RE.match(before) or (after and after in "期集话話回季"):
                 continue
         text = source[start:end].strip()
         if text and text not in by_field.setdefault(field, []):
             by_field[field].append(text)
 
     result: dict[str, object] = {}
-    if by_field.get("TITLE_ZH"):
-        result["titles_zh"] = by_field["TITLE_ZH"]
-    if by_field.get("TITLE_EN"):
-        result["titles_en"] = by_field["TITLE_EN"]
+    for field, key in (("TITLE_ZH", "titles_zh"), ("TITLE_EN", "titles_en")):
+        titles = by_field.get(field, [])
+        if len(titles) > 1:
+            # 单字符"别名"几乎必是模型碎片（"金部长"碎成 '金'/'长'）：
+            # 已有更长片名时丢弃；真正的单字片名（《影》）通常是唯一主名，保留
+            titles = [t for t in titles if len(t) > 1] or titles
+        if titles:
+            result[key] = titles
 
     for span_text in by_field.get("YEAR", []):
         m = _YEAR_RE.search(span_text)

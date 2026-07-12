@@ -36,7 +36,9 @@ logger = logging.getLogger("movieclaw_enrich")
 # v2: 新增 media_type（影视类型）推断
 # v3: 片名/年份/季集/题材切换为小模型抽取（规则版 year/season_episode 提取器下线），
 #     新增 titles_zh/titles_en/episodes_total/content_type 字段
-ENRICH_VERSION = 3
+# v4: 修复 v3 两个抽取缺陷（文本末尾年份被量词守卫误杀；单字碎片混入别名），
+#     v3 标记的存量行需重算
+ENRICH_VERSION = 4
 
 
 def _has_value(value: object) -> bool:
