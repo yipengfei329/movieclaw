@@ -111,6 +111,8 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=12)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=5e-5)
+    parser.add_argument("--train-fraction", type=float, default=1.0,
+                        help="只用训练集的前 N 比例（学习曲线实验用，dev/test 不动）")
     args = parser.parse_args()
 
     tokenizer = AutoTokenizer.from_pretrained(args.base)
@@ -119,6 +121,12 @@ def main() -> None:
     # clean_only：带 review 标记的记录 span 不完整（假阴性），排除出训练/开发集
     train_items = load_split(args.data, "train", clean_only=True)
     dev_items = load_split(args.data, "dev", clean_only=True)
+    if args.train_fraction < 1.0:
+        import random as _random
+
+        _random.Random(42).shuffle(train_items)
+        train_items = train_items[: int(len(train_items) * args.train_fraction)]
+        print(f"学习曲线模式：只用 {args.train_fraction:.0%} 训练数据（{len(train_items)} 条）")
     quarantined = len(load_split(args.data, "train")) - len(train_items)
     print(f"训练集 {len(train_items)} 条 / 开发集 {len(dev_items)} 条（测试集留给 evaluate.py）")
     if quarantined:

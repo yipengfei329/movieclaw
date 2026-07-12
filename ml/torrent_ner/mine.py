@@ -26,16 +26,29 @@ import numpy as np
 from torrent_ner.dataio import read_jsonl
 from torrent_ner.labels import MAX_LENGTH
 
-# (名称, 正则, 配额)——配额按错例频度和池内存量拍的，改动无需仪式感
-PATTERN_QUOTAS = [
-    ("第N期综艺", re.compile(r"第\s?\d+\s?期"), 250),
-    ("英文序数季", re.compile(r"\d+(st|nd|rd|th)\s+Season", re.I), 44),
-    ("叠字片名", re.compile(r"(.)\1{2,}"), 200),
-    ("动画线索", re.compile(r"新番|字幕[组組社]|OVA|剧场版|劇場版|国漫|動畫|动画"), 350),
-    ("纪录片线索", re.compile(r"纪录|紀錄|BBC|NHK|Documentary", re.I), 250),
-    ("综艺线索", re.compile(r"综艺|綜藝|真人秀|脱口秀|演唱会|演唱會"), 250),
+# 挖掘桶：(名称, 判定函数, 配额)。配额按错例频度、池内存量和分布缺口拍的，
+# 每轮按当轮病灶改这张表即可，改动无需仪式感。
+# —— 第四轮（放大到 1.5 万总量）：加深缺口桶 + 代表性随机切片锚住分布 ——
+_YEAR_RE = re.compile(r"(19|20)\d{2}")
+
+def _text(r: dict) -> str:
+    return r["title"] + " " + r.get("subtitle", "")
+
+BUCKET_QUOTAS = [
+    ("成人区(番号规则空白)", lambda r: r.get("category") == "AV", 200),
+    ("音乐区含年份(负样本)", lambda r: r.get("category") == "Music" and _YEAR_RE.search(r["title"]), 200),
+    ("游戏/其他区(负样本)", lambda r: r.get("category") in ("Game", "Other"), 150),
+    ("YYYYMMDD日期贴写", lambda r, p=re.compile(r"(?<!\d)20\d{6}(?!\d)"): p.search(_text(r)), 300),
+    ("全N集总集数", lambda r, p=re.compile(r"全\s?\d+\s?[集话話]|\d+\s?[集话話]全"): p.search(_text(r)), 400),
+    ("E区间集号", lambda r, p=re.compile(r"E\d+\s?-\s?E?\d+", re.I): p.search(_text(r)), 300),
+    ("冒号中文片名", lambda r, p=re.compile(r"[一-鿿][:：][一-鿿]"): p.search(_text(r)), 500),
+    ("叠字片名", lambda r, p=re.compile(r"(.)\1{2,}"): p.search(_text(r)), 200),
+    ("第N期综艺", lambda r, p=re.compile(r"第\s?\d+\s?期"): p.search(_text(r)), 200),
+    ("动画区", lambda r: r.get("category") == "Anime", 300),
+    ("纪录片区", lambda r: r.get("category") == "Documentary", 280),
+    ("代表性随机切片", lambda r: True, 900),  # 放最后：从剩余样本随机抽，锚住整体分布
 ]
-UNCERTAIN_QUOTA = 400
+UNCERTAIN_QUOTA = 600
 
 
 def confirmed_error_ids() -> set[str]:
@@ -116,14 +129,13 @@ def main() -> None:
             picked[item["id"]] = item
     print(f"确凿错例入队 {len(picked)} 条")
 
-    # 2) 模式配额
-    for name, pattern, quota in PATTERN_QUOTAS:
-        hits = [r for r in wild if r["id"] not in picked
-                and pattern.search(r["title"] + " " + r.get("subtitle", ""))]
+    # 2) 挖掘桶配额
+    for name, predicate, quota in BUCKET_QUOTAS:
+        hits = [r for r in wild if r["id"] not in picked and predicate(r)]
         take = hits if len(hits) <= quota else rng.sample(hits, quota)
         for item in take:
             picked[item["id"]] = item
-        print(f"模式[{name}] 命中 {len(hits)}，入队 {len(take)}")
+        print(f"桶[{name}] 命中 {len(hits)}，入队 {len(take)}")
 
     # 3) 不确定度挖掘（对剩余样本全量推理）
     rest = [r for r in wild if r["id"] not in picked]
@@ -145,7 +157,7 @@ def main() -> None:
     with open(out, "w", encoding="utf-8") as f:
         for row in queue:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
-    print(f"第二轮队列共 {len(queue)} 条 → {out}")
+    print(f"挖掘队列共 {len(queue)} 条 → {out}")
 
 
 if __name__ == "__main__":
