@@ -119,5 +119,9 @@ ml/
 - **双引擎交叉质检**：同一批样本分别用 claude / codex 各标一次（写入不同
   文件），diff 出分歧样本人工裁决——比通读全部标注省力得多，适合在全量
   标注后抽 10% 做质量审计。
-- 待办：模型达标后在 `movieclaw_enrich` 增加模型提取器（置信度不足回退现有
-  规则），并接 TMDB 匹配回填规范片名/年份。
+- **已接入线上**（2026-07-13）：`movieclaw_enrich.inference` 消费本目录产物
+  （片名/年份/季集/双轴分类走模型，封闭词表技术字段仍走规则）。模型文件部署到
+  `data/models/torrent-ner/`（model.int8.onnx + tokenizer.json + labels.json，
+  可用 MOVIECLAW_NER_DIR 覆盖路径），缺席时优雅降级。**改动模型/重训后**：
+  export.py 产物覆盖部署目录 + 主项目 `ENRICH_VERSION` +1 触发存量重算。
+- 待办：TMDB 匹配回填规范片名/年份；线上低置信样本回流标注。

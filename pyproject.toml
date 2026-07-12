@@ -7,7 +7,7 @@ name = "movieclaw"
 version = "0.1.0"
 description = "Best-practice Python HTTP service template powered by FastAPI."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
   { name = "yipengfei" }
@@ -20,6 +20,42 @@ dependencies = [
   "parsel>=1.9.0,<2.0.0",
   "tenacity>=9.0.0,<10.0.0",
   "pyyaml>=6.0,<7.0",
+  "sqlmodel>=0.0.22,<0.1.0",
+  "aiosqlite>=0.20.0,<1.0.0",
+  "alembic>=1.13.0,<2.0.0",
+  # SQLAlchemy 的 async 引擎依赖 greenlet；部分 Python 版本不会自动拉取，显式声明
+  "greenlet>=3.0.0,<4.0.0",
+  # 定时任务调度：进程内运行、复用现有 asyncio 事件循环（AsyncIOScheduler）。
+  # 锁定 3.x —— 4.0 截至目前仍是 alpha 预发布，官方明确不建议用于生产。
+  "apscheduler>=3.11.0,<4.0.0",
+  # 敏感配置字段的落库加密：用 Fernet（AES-128-CBC + HMAC 的认证加密）保护
+  # api_key/password/token 等密文，主密钥由 movieclaw_db.crypto 管理。
+  "cryptography>=43.0.0,<46.0.0",
+  # 每站请求限流：asyncio 原生漏桶（AsyncLimiter），对 PT 站点的"礼貌硬下限"。
+  "aiolimiter>=1.2.0,<2.0.0",
+  # 解析 multipart/form-data 上传（首页背景图上传接口 UploadFile 依赖它）。
+  "python-multipart>=0.0.9,<1.0.0",
+  # 管理员密码哈希：argon2 单向哈希（passlib 已停更，pwdlib 是其现代替代）。
+  # 与 SecretBox 的分工：密码永不需要回显，存哈希而非可逆密文。
+  "pwdlib[argon2]>=0.2.0,<1.0.0",
+  # 登录会话令牌签名（HttpOnly Cookie 的内容）：Pallets 维护，Flask session 同款机制。
+  "itsdangerous>=2.2.0,<3.0.0",
+  # 下载服务层（movieclaw_downloader）的两个下载器客户端。均为同步 requests
+  # 实现，适配器内用 asyncio.to_thread 包装成 async。
+  # qbittorrent-api 用日历版本号（YYYY.M.PATCH），按年份上限约束。
+  "qbittorrent-api>=2025.1.0,<2027.0.0",
+  "transmission-rpc>=7.0.0,<8.0.0",
+  # LLM 接入层（movieclaw_llm）：官方 openai SDK 作为唯一协议客户端，
+  # 通过自定义 base_url 覆盖所有 OpenAI 兼容端点（含阿里云百炼 compatible-mode）。
+  "openai>=2.45.0,<3.0.0",
+  # 工具调用参数的 JSON Schema 校验：校验失败作为 tool result 回喂模型而非中断 agent loop。
+  "jsonschema>=4.23.0,<5.0.0",
+  # 种子名抽取小模型的推理三件套（movieclaw_enrich.inference）：
+  # onnxruntime 跑 int8 模型（CPU 单条约 3ms），tokenizers 只做分词（比拖整个
+  # transformers 轻两个数量级），模型文件本体从 GitHub Release 下载、不进包。
+  "onnxruntime>=1.19,<2.0",
+  "tokenizers>=0.20,<1.0",
+  "numpy>=1.26,<3.0",
 ]
 
 [project.optional-dependencies]
@@ -49,7 +85,7 @@ markers = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py311"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
@@ -60,6 +96,21 @@ select = [
   "UP",
   "B",
   "SIM",
+]
+
+# 系统提示词文件：提示词正文的自然段落不按代码行宽折行（折行会改变提示词内容）
+[tool.ruff.lint.per-file-ignores]
+"src/movieclaw_agent/prompts.py" = ["E501"]
+
+# FastAPI 的 Depends()/Query() 等必须写在参数默认值里，这是官方推荐用法，
+# 因此把它们标记为"不可变调用"，豁免 B008（函数调用不应出现在默认值）告警。
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+  "fastapi.Depends",
+  "fastapi.Query",
+  "fastapi.Path",
+  "fastapi.Body",
+  "fastapi.File",
 ]
 
 [tool.ruff.format]
