@@ -25,6 +25,8 @@ import re
 import threading
 from pathlib import Path
 
+import numpy as np
+
 logger = logging.getLogger("movieclaw_enrich")
 
 # span 平均置信度低于此值即丢弃（softmax 概率）；分类头低于此值输出未知
@@ -45,17 +47,21 @@ _RANGE_SEP_RE = re.compile(r"[-~至到]")
 _YEAR_RE = re.compile(r"(?<!\d)(18|19|20)\d{2}(?!\d)")
 _CJK_RE = re.compile(r"[一-鿿]")
 
-# 数字吸附与区间合并只作用于号码类字段（片名 span 不能动边界）
+# span 规范化只作用于号码类字段（片名 span 不能动边界）
 _NUMERIC_FIELDS = {"YEAR", "SEASON", "EPISODE", "EPISODE_TOTAL"}
 # 同字段相邻 span 之间允许桥接的间隙："S01-S05" 被拆成两段时中间是 "-"/"-S"
 _RANGE_GAP_RE = re.compile(r"[\s\-~至到]{1,2}[SsEePp]{0,2}")
 
 
-def _merge_range_spans(spans: list[tuple], texts: tuple[str, str]) -> list[tuple]:
-    """把被模型拆开的号码区间重新桥接成单个 span。
+def _normalize_spans(spans: list[tuple], texts: tuple[str, str]) -> list[tuple]:
+    """号码类 span 的规范化：修复模型把一个号码表达切碎的两种形态。
 
-    条件：同来源段、同号码类字段、两 span 间隙短且形如区间分隔（"-"、"-S"、
-    "至"）。合并后 _parse_numbers 才能看到完整的 "S01-S05" 并展开区间。
+    1. **区间桥接**：同来源段、同字段、间隙形如区间分隔（"-"、"-S"、"至"）的
+       相邻 span 合并——"S01-S05" 被拆成两段时，合并后 _parse_numbers 才能
+       看到完整区间并展开；合并段置信度取两者较小值（保守）。
+    2. **数字吸附**：边界正好切在数字串中间（界内外都是数字）时向外吸满——
+       tokenizer 把 "2026" 切成 202+6、模型只标前半时，吸附后才是完整号码。
+       边界在字母/量词上绝不吸（"S02E05" 的 E05 左边贴着 02，但 E 不是数字）。
     """
     merged: list[list] = []
     for span in sorted(spans, key=lambda s: (s[0], s[2])):
@@ -74,6 +80,17 @@ def _merge_range_spans(spans: list[tuple], texts: tuple[str, str]) -> list[tuple
                 last[4] = min(last[4], prob)
                 continue
         merged.append([seq_id, field, start, end, prob])
+
+    for span in merged:
+        seq_id, field, start, end = span[0], span[1], span[2], span[3]
+        if field not in _NUMERIC_FIELDS:
+            continue
+        source = texts[seq_id]
+        while start > 0 and source[start].isdigit() and source[start - 1].isdigit():
+            start -= 1
+        while end < len(source) and source[end - 1].isdigit() and source[end].isdigit():
+            end += 1
+        span[2], span[3] = start, end
     return [tuple(s) for s in merged]
 
 
@@ -154,9 +171,7 @@ class _NerModel:
 _MODEL = _NerModel()
 
 
-def _softmax(x, axis: int = -1):
-    import numpy as np
-
+def _softmax(x: np.ndarray, axis: int = -1) -> np.ndarray:
     e = np.exp(x - x.max(axis=axis, keepdims=True))
     return e / e.sum(axis=axis, keepdims=True)
 
@@ -199,8 +214,6 @@ def extract_with_model(title: str, subtitle: str = "") -> dict[str, object]:
     if session is None:
         return {}
 
-    import numpy as np
-
     enc = tokenizer.encode(title, subtitle or " ")
     inputs = {
         "input_ids": np.array([enc.ids], dtype=np.int64),
@@ -216,20 +229,11 @@ def extract_with_model(title: str, subtitle: str = "") -> dict[str, object]:
         s for s in _decode_spans(meta["labels"], span_probs, pred_ids, enc.offsets, enc.sequence_ids)
         if s[4] >= _MIN_SPAN_PROB and s[0] <= 1
     ]
-    spans = _merge_range_spans(spans, texts)
+    spans = _normalize_spans(spans, texts)
 
     by_field: dict[str, list[str]] = {}
     for seq_id, field, start, end, _prob in spans:
         source = texts[seq_id]
-        if field in _NUMERIC_FIELDS:
-            # 数字吸附：仅当边界正好切在数字串中间（界内外都是数字）才向外
-            # 吸满——模型偶发把 span 从数字中间切开（"第2024期"碎成 '4期'），
-            # 吸附后守卫才能看到完整号码。边界在字母/量词上时绝不吸
-            # （"S02E05" 的 E05 左边贴着 02，但 E 不是数字，不能吸过去）。
-            while start > 0 and source[start].isdigit() and source[start - 1].isdigit():
-                start -= 1
-            while end < len(source) and source[end - 1].isdigit() and source[end].isdigit():
-                end += 1
         if field == "YEAR":
             # 老规则的两条实证守卫，作为模型输出的确定性护栏保留：
             # 紧贴 CJK 的数字是片名一部分（请回答1988）；跟量词的是期号/集号。
@@ -275,22 +279,22 @@ def extract_with_model(title: str, subtitle: str = "") -> dict[str, object]:
     if episodes:
         result["episodes"] = sorted(set(episodes))
 
-    # 总集数：episodes_total 记数值，complete 置真；集号列表缺席时按 1..N 展开
-    # （保持旧行为，订阅匹配依赖 episodes 列表判断覆盖范围）
+    # 总集数：episodes_total 记数值 + complete 置真，仅此而已——**不展开**
+    # 成 episodes=[1..N]。提取层只输出观测值：种子名写的是"全20集"，不是
+    # "第1集到第20集"；覆盖范围如何解释是消费方的业务（matcher 把
+    # "有季无集 + complete" 判为整季 pack，前端把 complete 视为含任意一集）。
     for span_text in by_field.get("EPISODE_TOTAL", []):
         totals = _parse_numbers(span_text, max_value=_MAX_EPISODE_SPAN, cap=1)
         result["complete"] = True
         if totals:
             result["episodes_total"] = totals[0]
-            if not episodes:
-                result["episodes"] = list(range(1, totals[0] + 1))
         break
 
     media_probs = _softmax(media_logits[0])
     if float(media_probs.max()) >= _MIN_CLS_PROB:
         media = meta["media_types"][int(media_probs.argmax())]
-        # 语义映射：series→tv 对齐既有枚举；other=非影视，不标注
-        result["model_media_type"] = {"movie": "movie", "series": "tv"}.get(media)
+        # 语义映射：series→tv 对齐既有枚举；other=非影视 → None（不标注）
+        result["media_type"] = {"movie": "movie", "series": "tv"}.get(media)
 
     content_probs = _softmax(content_logits[0])
     if float(content_probs.max()) >= _MIN_CLS_PROB:

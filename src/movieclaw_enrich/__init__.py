@@ -38,7 +38,9 @@ logger = logging.getLogger("movieclaw_enrich")
 #     新增 titles_zh/titles_en/episodes_total/content_type 字段
 # v4: 修复 v3 两个抽取缺陷（文本末尾年份被量词守卫误杀；单字碎片混入别名），
 #     v3 标记的存量行需重算
-ENRICH_VERSION = 4
+# v5: "全N集"不再展开成 episodes=[1..N]（提取层只输出观测值，覆盖解释是消费方
+#     业务——matcher 判整季 pack、前端 complete 含任意一集），episodes_total 承载数值
+ENRICH_VERSION = 5
 
 
 def _has_value(value: object) -> bool:
@@ -77,18 +79,14 @@ def enrich(title: str, subtitle: str = "", category: str | None = None) -> Torre
 
     # 模型通道：片名/年份/季集/题材，双段联合推理一次产出。
     # 模型缺席/失败返回空字典，相关字段保持空值——绝不拖垮整条数据。
-    model_media: str | None = None
     try:
-        model_fields = extract_with_model(title, subtitle) if title else {}
-        model_media = model_fields.pop("model_media_type", None)  # type: ignore[assignment]
-        fields.update(model_fields)
+        fields.update(extract_with_model(title, subtitle) if title else {})
     except Exception:  # noqa: BLE001
         logger.warning("模型提取失败，已跳过：%.80r", title)
 
     attrs = TorrentAttrs(**fields)  # type: ignore[arg-type]
-    # 影视类型：站点分类明确时信站点，否则用模型分类头的判定
+    # 影视类型仲裁：站点分类明确标注 movie/tv 时信站点（极少标错），
+    # 否则保留模型分类头的判定（extract_with_model 已产出 media_type）
     if category in ("movie", "tv"):
         attrs.media_type = category
-    else:
-        attrs.media_type = model_media
     return attrs

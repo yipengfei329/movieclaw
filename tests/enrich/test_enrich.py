@@ -114,7 +114,10 @@ class TestChinesePT:
             "全职法师 第五季 全12集 | 国语中字",
         )
         assert a.seasons == [5]
-        assert a.episodes == list(range(1, 13))
+        # v5 起"全12集"不再展开集列表——提取层只输出观测值，
+        # 总集数由 episodes_total 承载，覆盖解释交给消费方
+        assert a.episodes == []
+        assert a.episodes_total == 12
         assert a.complete is True
         assert a.release_group == "CMCT"
 
