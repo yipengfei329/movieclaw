@@ -231,6 +231,25 @@ def extract_with_model(title: str, subtitle: str = "") -> dict[str, object]:
     ]
     spans = _normalize_spans(spans, texts)
 
+    # 片名 span 的分隔符结构精修（structure.py：金标实测 0.1% 跨界的统计背书，
+    # 跨界切割/段首标签剥离/尾部句号版本词修剪——只收缩不扩展）
+    from movieclaw_enrich.structure import refine_title_spans, title_candidates
+
+    title_groups: dict[tuple, list] = {}
+    other_spans: list[tuple] = []
+    for span in spans:
+        if span[1] in ("TITLE_ZH", "TITLE_EN"):
+            title_groups.setdefault((span[0], span[1]), []).append(span)
+        else:
+            other_spans.append(span)
+    for (seq_id, field), group in title_groups.items():
+        prob = min(s[4] for s in group)  # 精修后的组置信度保守取最小值
+        other_spans.extend(
+            (seq_id, field, start, end, prob)
+            for start, end in refine_title_spans(texts[seq_id], [(s[2], s[3]) for s in group])
+        )
+    spans = sorted(other_spans, key=lambda s: (s[0], s[2]))
+
     by_field: dict[str, list[str]] = {}
     for seq_id, field, start, end, _prob in spans:
         source = texts[seq_id]
@@ -301,5 +320,12 @@ def extract_with_model(title: str, subtitle: str = "") -> dict[str, object]:
         content = meta["content_types"][int(content_probs.argmax())]
         if content != "other":  # other 是残差项，不算"观测到特殊题材"
             result["content_type"] = content
+
+    # 候选别名：副标题里"像片名但模型没抽出"的分段——漏抽/字段混淆的保险层，
+    # 只供 TMDB 匹配降级查询，不作片名展示（误报由匹配环节自然淘汰）
+    known_titles = list(result.get("titles_zh", [])) + list(result.get("titles_en", []))
+    candidates = title_candidates(subtitle or "", known_titles)
+    if candidates:
+        result["title_candidates"] = candidates
 
     return result

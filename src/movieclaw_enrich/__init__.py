@@ -40,7 +40,13 @@ logger = logging.getLogger("movieclaw_enrich")
 #     v3 标记的存量行需重算
 # v5: "全N集"不再展开成 episodes=[1..N]（提取层只输出观测值，覆盖解释是消费方
 #     业务——matcher 判整季 pack、前端 complete 含任意一集），episodes_total 承载数值
-ENRICH_VERSION = 5
+# v6: 模型升级（标注规范 v9 + 15 epoch + 合成增强）：修复标签堆叠截断片名/
+#     花絮混入/促销贴纸碎片/人名淌入等 7 类线上错例中的 6 类，EPISODE F1 0.950
+# v7: 模型升级（规范 v10：版本描述词/尾部句号/章节小标题不入片名；media_type
+#     新增 collection——推理端暂映射 None 待产品化）：动漫专项 + 一致性重标
+# v8: 片名 span 分隔符结构精修（structure.py，金标 0.1% 跨界统计背书）+
+#     新增 title_candidates 候选别名字段（TMDB 匹配的降级查询词/漏抽保险层）
+ENRICH_VERSION = 8
 
 
 def _has_value(value: object) -> bool:

@@ -32,6 +32,9 @@ class TorrentAttrs(BaseModel):
     content_type: str | None = None
     titles_zh: list[str] = []          # 中文片名及别名（首个为主名）
     titles_en: list[str] = []          # 外文片名及别名（首个为主名）
+    # 候选别名：副标题分段里"像片名但模型未抽出"的文本（漏抽/字段混淆的保险层）。
+    # 仅供 TMDB 匹配做降级查询，不作片名展示——误报由匹配环节自然淘汰
+    title_candidates: list[str] = []
     year: int | None = None            # 发行年份（保守提取，宁缺毋滥）
     seasons: list[int] = []            # 观测到的季号（S01-S03 展开为 [1,2,3]）
     episodes: list[int] = []           # 观测到的集号（E01-E06 展开）
