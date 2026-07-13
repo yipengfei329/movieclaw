@@ -28,8 +28,13 @@ from torrent_ner.dataio import load_split
 from torrent_ner.labels import CONTENT_TYPES, FIELDS, ID2LABEL, MAX_LENGTH, MEDIA_TYPES
 
 
-def predict(session, tokenizer, title: str, subtitle: str) -> tuple[set, str, str]:
-    """跑一条推理 → (span 集合, media_type, content_type)。"""
+def predict(
+    session, tokenizer, title: str, subtitle: str, postprocess: bool = True
+) -> tuple[set, str, str]:
+    """跑一条推理 → (span 集合, media_type, content_type)。
+
+    postprocess=True 时对片名 span 施加分隔符结构约束（见 postprocess.py）：
+    金标实测仅 0.1% 片名跨越 /|丨 边界，切割/吸附/滤噪三规则近乎零风险。"""
     enc = tokenizer(
         title,
         subtitle or " ",
@@ -70,6 +75,16 @@ def predict(session, tokenizer, title: str, subtitle: str) -> tuple[set, str, st
         else:
             current = [seq_id, field, start, end]
             runs.append(current)
+    if postprocess:
+        from torrent_ner.postprocess import refine_title_spans
+
+        texts = (title, subtitle or " ")
+        refined: list[list] = []
+        for seq_id, source_text in enumerate(texts):
+            for field in ("TITLE_ZH", "TITLE_EN"):
+                raw = [(r[2], r[3]) for r in runs if r[0] == seq_id and r[1] == field]
+                refined.extend([seq_id, field, s, e] for s, e in refine_title_spans(source_text, raw))
+        runs = [r for r in runs if r[1] not in ("TITLE_ZH", "TITLE_EN")] + refined
     for seq_id, field, start, end in runs:
         spans.add((sources[seq_id], field, start, end))
     return (
@@ -85,6 +100,7 @@ def main() -> None:
     parser.add_argument("--onnx", default="ml/artifacts/torrent-ner/onnx/model.int8.onnx")
     parser.add_argument("--split", default="test", choices=["test", "dev", "train"])
     parser.add_argument("--show-errors", type=int, default=10, help="最多打印多少条 NER 错例")
+    parser.add_argument("--no-postprocess", action="store_true", help="关闭分隔符结构后处理（A/B 对照用）")
     args = parser.parse_args()
 
     onnx_path = Path(args.onnx)
@@ -108,7 +124,9 @@ def main() -> None:
     for item in items:
         gold = {(s["source"], s["field"], s["start"], s["end"]) for s in item["spans"]}
         t0 = time.perf_counter()
-        pred, media, content = predict(session, tokenizer, item["title"], item.get("subtitle", ""))
+        pred, media, content = predict(
+            session, tokenizer, item["title"], item.get("subtitle", ""), postprocess=not args.no_postprocess
+        )
         latencies.append(time.perf_counter() - t0)
 
         for span in pred & gold:
