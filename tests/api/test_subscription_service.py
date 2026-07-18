@@ -1,0 +1,381 @@
+"""订阅服务的核心逻辑测试：E 的展开、三类调度语义、diff 重算与四条不变量。
+
+夹具剧集的季集结构相对"今天"动态构造：
+- S1：两集全部已播（纯补旧季）
+- S2：E1 昨天播出（补旧）、E2 十天后播出（追新）、E3 未定档
+"""
+
+from __future__ import annotations
+
+from datetime import timedelta
+
+import httpx
+import pytest
+import pytest_asyncio
+from sqlmodel import select
+
+from movieclaw_api.core.config import get_settings
+from movieclaw_api.exceptions import BadRequestException, ConflictException
+from movieclaw_api.services.media_library import MediaLibraryService
+from movieclaw_api.services.rule_sets import RuleSetService
+from movieclaw_api.services.subscription import FUTURE_GRACE, SubscriptionService
+from movieclaw_db.engine import dispose_db, get_database, init_db
+from movieclaw_db.migrations import run_migrations
+from movieclaw_db.models import SubscriptionStatus, WantedItem, WantedStatus
+from movieclaw_db.models.base import utcnow
+from movieclaw_media.models import MediaKind
+from movieclaw_media.tmdb import TmdbClient
+
+_KEY = "0123456789abcdef0123456789abcdef"
+
+_TODAY = utcnow().date()
+_AIRED = (_TODAY - timedelta(days=10)).isoformat()
+_YESTERDAY = (_TODAY - timedelta(days=1)).isoformat()
+_FUTURE_DATE = _TODAY + timedelta(days=10)
+_FUTURE = _FUTURE_DATE.isoformat()
+
+_ROUTES = {
+    "/3/movie/100": {
+        "id": 100,
+        "title": "测试电影",
+        "original_title": "Test Movie",
+        "release_date": _AIRED,
+        "status": "Released",
+        "external_ids": {},
+        "alternative_titles": {"titles": []},
+        "translations": {"translations": []},
+    },
+    "/3/tv/200": {
+        "id": 200,
+        "name": "测试剧集",
+        "original_name": "Test Show",
+        "first_air_date": "2024-01-01",
+        "status": "Returning Series",
+        "external_ids": {},
+        "alternative_titles": {"results": []},
+        "translations": {"translations": []},
+        "seasons": [{"season_number": 1}, {"season_number": 2}],
+    },
+    "/3/tv/200/season/1": {
+        "name": "第 1 季",
+        "air_date": "2024-01-01",
+        "episodes": [
+            {"episode_number": 1, "name": "E1", "air_date": _AIRED},
+            {"episode_number": 2, "name": "E2", "air_date": _AIRED},
+        ],
+    },
+    "/3/tv/200/season/2": {
+        "name": "第 2 季",
+        "air_date": _YESTERDAY,
+        "episodes": [
+            {"episode_number": 1, "name": "E1", "air_date": _YESTERDAY},
+            {"episode_number": 2, "name": "E2", "air_date": _FUTURE},
+            {"episode_number": 3, "name": "E3", "air_date": None},
+        ],
+    },
+}
+
+
+def _fake_tmdb() -> TmdbClient:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = _ROUTES.get(request.url.path)
+        if payload is None:
+            return httpx.Response(404, json={})
+        return httpx.Response(200, json=payload)
+
+    return TmdbClient(_KEY, transport=httpx.MockTransport(handler))
+
+
+@pytest_asyncio.fixture
+async def db(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{tmp_path / 'sub.db'}")
+    get_settings.cache_clear()
+    settings = get_settings()
+    init_db(settings.database_url, echo=False)
+    await run_migrations()
+    yield get_database()
+    await dispose_db()
+    get_settings.cache_clear()
+
+
+def _service(session) -> SubscriptionService:
+    return SubscriptionService(session, MediaLibraryService(session, _fake_tmdb()))
+
+
+async def _wanted_of(session, subscription_id: int) -> list[WantedItem]:
+    result = await session.execute(
+        select(WantedItem)
+        .where(WantedItem.subscription_id == subscription_id)
+        .order_by(WantedItem.season_number, WantedItem.episode_number)
+    )
+    return list(result.scalars().all())
+
+
+def _key_map(rows: list[WantedItem]) -> dict[tuple[int, int], WantedItem]:
+    return {(w.season_number, w.episode_number): w for w in rows}
+
+
+async def _mark(session, wanted: WantedItem, status: WantedStatus) -> None:
+    wanted.status = status
+    wanted.grabbed_at = utcnow()
+    session.add(wanted)
+    await session.commit()
+
+
+# ---------------------------------------------------------------------------
+# E 的初始化与三类调度语义
+# ---------------------------------------------------------------------------
+
+
+async def test_movie_creates_single_backfill_unit(db) -> None:
+    """电影 = (0,0) 哨兵补旧工单：立即排队真实搜索。"""
+    async with db.session() as session:
+        sub = await _service(session).create(MediaKind.MOVIE, 100)
+        wanted = await _wanted_of(session, sub.id)
+
+    assert [(w.season_number, w.episode_number) for w in wanted] == [(0, 0)]
+    assert wanted[0].status == WantedStatus.WANTED
+    assert wanted[0].next_search_at is not None  # 补旧：now
+    assert sub.status == SubscriptionStatus.ACTIVE
+
+
+async def test_tv_selected_seasons_full_domain_with_schedule_classes(db) -> None:
+    """勾选季贡献全部已知集；调度按集分三类：补旧=now / 追新=air+宽限 / 未定档=NULL。"""
+    async with db.session() as session:
+        sub = await _service(session).create(
+            MediaKind.TV, 200, selected_seasons=[1, 2], follow_future=False
+        )
+        wanted = _key_map(await _wanted_of(session, sub.id))
+
+    assert set(wanted) == {(1, 1), (1, 2), (2, 1), (2, 2), (2, 3)}
+    now = utcnow()
+    # 补旧：已播集立即到期
+    for key in [(1, 1), (1, 2), (2, 1)]:
+        assert wanted[key].next_search_at is not None
+        assert wanted[key].next_search_at <= now
+    # 追新：air_date + 宽限期，且高优先级
+    future_unit = wanted[(2, 2)]
+    assert future_unit.next_search_at is not None
+    assert future_unit.next_search_at.date() == _FUTURE_DATE + timedelta(
+        days=FUTURE_GRACE.days, hours=0
+    ) or future_unit.next_search_at > now  # 宽限期后到期
+    assert future_unit.priority > 0
+    # 未定档：不可调度
+    assert wanted[(2, 3)].next_search_at is None
+
+
+async def test_follow_future_only_excludes_aired(db) -> None:
+    """「只追未来」：不勾季 + 追新 → 只有未播/未定档集，已播集全部不要。"""
+    async with db.session() as session:
+        sub = await _service(session).create(
+            MediaKind.TV, 200, selected_seasons=[], follow_future=True
+        )
+        wanted = _key_map(await _wanted_of(session, sub.id))
+
+    assert set(wanted) == {(2, 2), (2, 3)}
+
+
+async def test_create_is_idempotent_per_media_item(db) -> None:
+    """同一条目重复订阅：幂等返回已有，不改参数、不加工单（不变量①的服务面）。"""
+    async with db.session() as session:
+        service = _service(session)
+        first = await service.create(MediaKind.TV, 200, selected_seasons=[1])
+        second = await service.create(
+            MediaKind.TV, 200, selected_seasons=[1, 2], follow_future=True
+        )
+        wanted = await _wanted_of(session, first.id)
+
+    assert second.id == first.id
+    assert second.selected_seasons == [1]  # 参数未被第二次调用篡改
+    assert len(wanted) == 2  # 仍是 S1 两集
+
+
+async def test_movie_rejects_season_selection(db) -> None:
+    async with db.session() as session:
+        with pytest.raises(BadRequestException):
+            await _service(session).create(MediaKind.MOVIE, 100, selected_seasons=[1])
+
+
+# ---------------------------------------------------------------------------
+# diff 重算（不变量③：现实不可逆）
+# ---------------------------------------------------------------------------
+
+
+async def test_update_deselect_keeps_grabbed_and_no_duplicate_on_reselect(db) -> None:
+    """取消勾选：未完成工单删除、已 grabbed 保留；重新勾选不重复创建。"""
+    async with db.session() as session:
+        service = _service(session)
+        sub = await service.create(MediaKind.TV, 200, selected_seasons=[1])
+        wanted = _key_map(await _wanted_of(session, sub.id))
+        await _mark(session, wanted[(1, 1)], WantedStatus.GRABBED)
+
+        await service.update(sub.id, selected_seasons=[])
+        after_deselect = _key_map(await _wanted_of(session, sub.id))
+        # S1E1 已 grabbed 保留；S1E2 还缺着 → 出域删除
+        assert set(after_deselect) == {(1, 1)}
+        assert after_deselect[(1, 1)].status == WantedStatus.GRABBED
+
+        await service.update(sub.id, selected_seasons=[1])
+        after_reselect = _key_map(await _wanted_of(session, sub.id))
+        # 重新入域：只补回 S1E2，S1E1 不重复创建（不会二次下载）
+        assert set(after_reselect) == {(1, 1), (1, 2)}
+        assert after_reselect[(1, 1)].status == WantedStatus.GRABBED
+
+
+async def test_update_disable_follow_future_clears_future_units(db) -> None:
+    """关掉追新：经追新进入且未完成的单元全部出域清除。"""
+    async with db.session() as session:
+        service = _service(session)
+        sub = await service.create(
+            MediaKind.TV, 200, selected_seasons=[], follow_future=True
+        )
+        assert len(await _wanted_of(session, sub.id)) == 2
+
+        await service.update(sub.id, follow_future=False)
+        assert await _wanted_of(session, sub.id) == []
+
+
+async def test_update_keeps_follow_units_when_deselecting_other_season(db) -> None:
+    """追新开着时做无关修改：追新血统的单元（air>创建日/未定档）不被误删。"""
+    async with db.session() as session:
+        service = _service(session)
+        sub = await service.create(
+            MediaKind.TV, 200, selected_seasons=[1], follow_future=True
+        )
+        before = set(_key_map(await _wanted_of(session, sub.id)))
+        assert before == {(1, 1), (1, 2), (2, 2), (2, 3)}
+
+        await service.update(sub.id, rule_set_id=None)  # 无关修改
+        after = set(_key_map(await _wanted_of(session, sub.id)))
+        assert after == before
+
+
+# ---------------------------------------------------------------------------
+# 派生状态（不变量④）
+# ---------------------------------------------------------------------------
+
+
+async def test_status_derives_completed_for_satisfied_movie(db) -> None:
+    """电影工单满足（P4 语义=grabbed）→ 派生 completed。"""
+    async with db.session() as session:
+        service = _service(session)
+        sub = await service.create(MediaKind.MOVIE, 100)
+        wanted = await _wanted_of(session, sub.id)
+        await _mark(session, wanted[0], WantedStatus.GRABBED)
+
+        refreshed = await service.set_paused(sub.id, False)  # 触发重算
+    assert refreshed.status == SubscriptionStatus.COMPLETED
+
+
+async def test_status_stays_active_while_growing(db) -> None:
+    """追新开着且剧未完结：即使当下零缺口也保持 active（E 还会生长）。"""
+    async with db.session() as session:
+        service = _service(session)
+        sub = await service.create(
+            MediaKind.TV, 200, selected_seasons=[], follow_future=True
+        )
+        for w in await _wanted_of(session, sub.id):
+            await _mark(session, w, WantedStatus.GRABBED)
+        refreshed = await service.set_paused(sub.id, False)
+    assert refreshed.status == SubscriptionStatus.ACTIVE
+
+
+async def test_paused_is_sticky_until_resumed(db) -> None:
+    """paused 是用户显式状态：重算不碰，恢复后才落回派生值。"""
+    async with db.session() as session:
+        service = _service(session)
+        sub = await service.create(MediaKind.MOVIE, 100)
+        paused = await service.set_paused(sub.id, True)
+        assert paused.status == SubscriptionStatus.PAUSED
+
+        wanted = await _wanted_of(session, sub.id)
+        await _mark(session, wanted[0], WantedStatus.GRABBED)
+        still_paused = await service.detail(sub.id)
+        assert still_paused[0].status == SubscriptionStatus.PAUSED
+
+        resumed = await service.set_paused(sub.id, False)
+        assert resumed.status == SubscriptionStatus.COMPLETED
+
+
+# ---------------------------------------------------------------------------
+# 活动流水（透明化：每个动作可回放）
+# ---------------------------------------------------------------------------
+
+
+async def test_activity_stream_records_every_action(db) -> None:
+    """创建/调整/暂停/恢复/收齐，每个动作都在时间线上留下中文可读记录。"""
+    async with db.session() as session:
+        service = _service(session)
+        sub = await service.create(
+            MediaKind.TV, 200, selected_seasons=[1, 2], follow_future=True
+        )
+        await service.update(sub.id, selected_seasons=[1])
+        await service.set_paused(sub.id, True)
+        await service.set_paused(sub.id, False)
+
+        activities = await service.activities(sub.id)
+
+    types = [a.type for a in reversed(activities)]  # 时间正序
+    assert types == ["created", "adjusted", "paused", "resumed"]
+
+    created = next(a for a in activities if a.type == "created")
+    # 创建摘要把调度分布说清楚：3 集补旧、1 集待播出、1 集未定档
+    assert "3 集已播出" in created.message
+    assert "1 集未播出" in created.message
+    assert "1 集未定档" in created.message
+    assert created.payload["wanted_total"] == 5
+
+    adjusted = next(a for a in activities if a.type == "adjusted")
+    assert adjusted.payload["removed"] > 0  # 取消勾选 S2 移除了未完成工单
+
+
+async def test_activity_records_completed_transition(db) -> None:
+    """派生状态翻转（收齐）也是活动：用户能看到订阅何时、为何完成。"""
+    async with db.session() as session:
+        service = _service(session)
+        sub = await service.create(MediaKind.MOVIE, 100)
+        wanted = await _wanted_of(session, sub.id)
+        await _mark(session, wanted[0], WantedStatus.GRABBED)
+        await service.set_paused(sub.id, False)  # 触发重算 → completed
+
+        activities = await service.activities(sub.id)
+    assert [a.type for a in activities][:1] == ["completed"]
+
+
+# ---------------------------------------------------------------------------
+# 规则组
+# ---------------------------------------------------------------------------
+
+
+async def test_rule_set_lazy_default_and_delete_guards(db) -> None:
+    """默认组懒种子且幂等；默认组与被引用组禁删；无引用组可删。"""
+    async with db.session() as session:
+        rule_service = RuleSetService(session)
+        default = await rule_service.ensure_default()
+        again = await rule_service.ensure_default()
+        assert default.id == again.id
+
+        with pytest.raises(BadRequestException):
+            await rule_service.delete(default.id)
+
+        extra = await rule_service.create("只要免费", {"free_only": True})
+        sub_service = _service(session)
+        sub = await sub_service.create(MediaKind.MOVIE, 100, rule_set_id=extra.id)
+        with pytest.raises(ConflictException):
+            await rule_service.delete(extra.id)
+
+        await sub_service.delete(sub.id)
+        await rule_service.delete(extra.id)  # 引用解除后可删
+
+
+async def test_rule_set_spec_validation(db) -> None:
+    """spec 经 RuleSetSpec 校验：类型不合法给可读中文错误；存精简形态。"""
+    async with db.session() as session:
+        rule_service = RuleSetService(session)
+        with pytest.raises(BadRequestException):
+            await rule_service.create("坏规则", {"resolutions": "1080p"})  # 应为列表
+
+        row = await rule_service.create(
+            "高清免费", {"resolutions": ["2160p", "1080p"], "free_only": True}
+        )
+        assert row.spec == {"resolutions": ["2160p", "1080p"], "free_only": True}

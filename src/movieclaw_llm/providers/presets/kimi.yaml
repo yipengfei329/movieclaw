@@ -1,0 +1,24 @@
+# Kimi 开放平台（月之暗面官方，api.moonshot.cn，OpenAI 兼容）。
+# 模型数据以官方文档为准（platform.moonshot.cn / platform.kimi.com，
+# 抓取于 2026-07-13）。输出与输入共享 256K 窗口、无独立输出上限，
+# max_output_tokens 留空；官方未公布思考预算上限，留空。
+# 编程专用的 kimi-k2.7-code 系未收录（仅思考、面向代码场景）。
+id: kimi
+display_name: Kimi 官方（月之暗面）
+protocol: openai_chat
+base_url: https://api.moonshot.cn/v1
+compat:
+  thinking_field: reasoning_content
+  supports_stream_usage: true
+models:
+  # 最新主力：1T 总参 / 32B 激活 MoE，混合思考，原生多模态
+  - id: kimi-k2.6
+    context_window: 262144
+    supports_tools: true
+    supports_thinking: true
+    modalities: [text, image, video]
+  - id: kimi-k2.5
+    context_window: 262144
+    supports_tools: true
+    supports_thinking: true
+    modalities: [text, image, video]

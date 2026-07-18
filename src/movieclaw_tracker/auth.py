@@ -130,7 +130,9 @@ class AuthProvider(abc.ABC):
     async def check(self, client: HttpClient) -> AuthState:
         """检查当前认证状态是否有效。"""
 
-    def bind(self, *, base_url: str, login_selectors: LoginSelectors | None = None) -> None:
+    def bind(  # noqa: B027 -- 默认空操作是刻意设计，仅需要站点上下文的 Provider 覆写
+        self, *, base_url: str, login_selectors: LoginSelectors | None = None
+    ) -> None:
         """由工厂函数调用，注入站点上下文（base_url、登录选择器等）。
 
         默认空操作。需要站点上下文的 Provider（如 CredentialAuthProvider）覆写此方法。
@@ -167,6 +169,39 @@ class CookieAuthProvider(AuthProvider):
     async def check(self, client: HttpClient) -> AuthState:
         # CookieAuthProvider 无法主动验证有效性（没有站点信息）
         # 具体的有效性检查由上层在首次请求失败时触发
+        return AuthState.AUTHENTICATED
+
+
+class ApiKeyAuthProvider(AuthProvider):
+    """API-Key 认证模式，用于走站点 API 而非网页的站点（如 M-Team）。
+
+    与 cookie 不同，API-Key 通过 HTTP 请求头传递（默认 ``x-api-key``），
+    认证时注入到 HttpClient 的默认请求头中，后续所有 API 请求自动携带。
+
+    获取方式（以 M-Team 为例）
+    ------------------------
+    登录网页站点 → 控制台/实验室 → 密钥（API Key）中创建并复制。
+
+    示例
+    ----
+    ::
+
+        provider = ApiKeyAuthProvider("your-api-key")
+        site = await create_site("mteam", auth_provider=provider)
+        await site.authenticate()
+    """
+
+    def __init__(self, api_key: str, *, header_name: str = "x-api-key") -> None:
+        self._api_key = api_key
+        self._header_name = header_name
+
+    async def authenticate(self, client: HttpClient) -> AuthResult:
+        # 直接把 API-Key 写入默认请求头，无需网络请求即可完成"认证"
+        client.set_header(self._header_name, self._api_key)
+        return AuthResult(success=True, state=AuthState.AUTHENTICATED)
+
+    async def check(self, client: HttpClient) -> AuthState:
+        # 无法离线校验 Key 有效性，实际有效性由首次 API 请求的响应决定
         return AuthState.AUTHENTICATED
 
 
@@ -268,7 +303,10 @@ class CredentialAuthProvider(AuthProvider):
 
                 # 下载验证码图片
                 captcha_rel_url = html.unescape(captcha_match.group(1))
-                captcha_img_url = self._url(captcha_rel_url) if not captcha_rel_url.startswith(("http://", "https://")) else captcha_rel_url
+                if captcha_rel_url.startswith(("http://", "https://")):
+                    captcha_img_url = captcha_rel_url
+                else:
+                    captcha_img_url = self._url(captcha_rel_url)
                 img_res = await client.raw_get(captcha_img_url)
                 captcha_text = await self._captcha_solver.solve(img_res.content)
                 logger.info("验证码识别结果：%s", captcha_text)

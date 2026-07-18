@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MovieClaw Cookie 同步</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="app">
+      <!-- 顶栏：品牌 + 连接状态 + 齿轮/返回 -->
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-logo">🎬</span>
+          <span class="brand-name">MovieClaw</span>
+          <span id="conn-chip" class="conn-chip">检测中…</span>
+        </div>
+        <button id="gear-btn" class="icon-btn" type="button" aria-label="设置">⚙</button>
+        <button id="back-btn" class="icon-btn hidden" type="button" aria-label="返回">←</button>
+      </header>
+
+      <!-- ============ 主视图：授权 + 立即同步 ============ -->
+      <section id="view-main">
+        <section class="card site-card">
+          <div id="site-avatar" class="site-avatar">?</div>
+          <div class="site-meta">
+            <div id="site-name" class="site-name">读取中…</div>
+            <div id="site-url" class="site-url"></div>
+          </div>
+        </section>
+
+        <div id="cookie-status" class="pill pill-neutral">
+          <span class="pill-dot"></span>
+          <span id="cookie-status-text">检测中…</span>
+        </div>
+
+        <button id="action-btn" class="btn-primary" disabled>
+          <span id="action-label">立即同步</span>
+        </button>
+
+        <p id="hint" class="hint"></p>
+      </section>
+
+      <!-- ============ 设置视图：后端连接 + 全局自动同步 ============ -->
+      <section id="view-settings" class="hidden">
+        <label class="field">
+          <span class="field-label">后端地址</span>
+          <input id="backend-url" class="input" type="url" placeholder="http://localhost:8000"
+            autocomplete="off" spellcheck="false" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">同步令牌</span>
+          <input id="sync-token" class="input mono" type="text"
+            placeholder="在后台「浏览器插件」中生成后粘贴到这里"
+            autocomplete="off" spellcheck="false" />
+        </label>
+
+        <div class="autosync">
+          <div class="autosync-text">
+            <span class="autosync-title">自动同步</span>
+            <span class="autosync-desc">Cookie 变化时自动同步</span>
+          </div>
+          <label class="switch">
+            <input id="autosync-toggle" type="checkbox" />
+            <span class="switch-slider"></span>
+          </label>
+        </div>
+
+        <button id="save-btn" class="btn-primary" type="button">保存并连接</button>
+
+        <p id="settings-status" class="hint"></p>
+      </section>
+    </main>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

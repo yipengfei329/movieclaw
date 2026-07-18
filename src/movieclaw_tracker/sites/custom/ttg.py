@@ -185,10 +185,7 @@ class TTGSite(NexusPHPSite):
             ratio = float("inf")
         else:
             ratio_raw = _font_text(3).replace("无限", "inf")
-            if ratio_raw == "inf":
-                ratio = float("inf")
-            else:
-                ratio = self._parse_float(ratio_raw)
+            ratio = float("inf") if ratio_raw == "inf" else self._parse_float(ratio_raw)
 
         return UserProfile(
             user_id=uid,
@@ -196,7 +193,9 @@ class TTGSite(NexusPHPSite):
             user_class=user_class,
             vip_group=vip_group,
             uploaded=uploaded_text,
+            uploaded_bytes=self._parse_size_bytes(uploaded_text) or 0,
             downloaded=downloaded_text,
+            downloaded_bytes=self._parse_size_bytes(downloaded_text) or 0,
             ratio=ratio,
             seeding_count=self._parse_int(seeding_text) or 0,
             leeching_count=self._parse_int(leeching_text) or 0,
@@ -297,6 +296,7 @@ class TTGSite(NexusPHPSite):
             free_deadline=free_deadline,
             download_volume_factor=dl_factor,
             upload_volume_factor=ul_factor,
-            detail_url=self._ensure_absolute(detail_href) if detail_href else None,
+            # detail_url 给用户在浏览器打开，用网页域名；download_url 由程序请求，用 base_url
+            detail_url=self._ensure_absolute_web(detail_href) if detail_href else None,
             download_url=self._ensure_absolute(download_href) if download_href else None,
         )

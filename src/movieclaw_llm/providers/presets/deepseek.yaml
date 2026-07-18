@@ -1,0 +1,26 @@
+# DeepSeek 官方开放平台（api.deepseek.com，OpenAI 兼容）。
+# 模型数据以官方文档为准（api-docs.deepseek.com，抓取于 2026-07-13）。
+# 注意：deepseek-chat / deepseek-reasoner 旧别名将于 2026-07-24 停用，
+# 目录只收录正式模型 id。官方 API 无思考预算参数，max_thinking_tokens 留空。
+id: deepseek
+display_name: DeepSeek 官方
+protocol: openai_chat
+base_url: https://api.deepseek.com
+compat:
+  thinking_field: reasoning_content
+  supports_stream_usage: true
+models:
+  # 旗舰：1.6T 总参 / 49B 激活 MoE
+  - id: deepseek-v4-pro
+    context_window: 1048576
+    max_output_tokens: 384000
+    supports_tools: true
+    supports_thinking: true
+    modalities: [text]
+  # 轻量：284B 总参 / 13B 激活 MoE，性价比主力
+  - id: deepseek-v4-flash
+    context_window: 1048576
+    max_output_tokens: 384000
+    supports_tools: true
+    supports_thinking: true
+    modalities: [text]

@@ -29,9 +29,14 @@ class BaseSite(abc.ABC):
         base_url: str,
         client: HttpClient,
         auth_manager: AuthManager,
+        web_base_url: str | None = None,
     ) -> None:
         self.site_id = site_id
         self.base_url = base_url.rstrip("/")
+        # 网页访问域名：拼接给用户看的链接（如种子详情页）时必须用它，
+        # 而不是 base_url —— API 类站点两者不同（api.m-team.cc vs tp.m-team.cc）。
+        # 未配置时与 base_url 相同（HTML 爬虫类站点请求域名即网页域名）。
+        self.web_base_url = (web_base_url or base_url).rstrip("/")
         self.client = client
         self.auth_manager = auth_manager
 
@@ -86,3 +91,14 @@ class BaseSite(abc.ABC):
     def _url(self, path: str) -> str:
         """拼接完整 URL。"""
         return f"{self.base_url}/{path.lstrip('/')}"
+
+    def _to_request_url(self, url: str) -> str:
+        """把用户可见链接换回程序请求地址。
+
+        detail_url 等展示链接用 web_base_url 域名拼接，用户回传（如获取详情）
+        时需要换回 base_url 才能带上正确的认证上下文发请求。
+        两个域名相同（未配置 web_base_url）时为无操作。
+        """
+        if self.web_base_url != self.base_url and url.startswith(self.web_base_url):
+            return self.base_url + url[len(self.web_base_url):]
+        return url

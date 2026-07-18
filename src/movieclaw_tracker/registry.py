@@ -16,6 +16,19 @@ from movieclaw_tracker.models import TorrentCategory
 logger = logging.getLogger("movieclaw_tracker.registry")
 
 
+# 各框架默认支持的授权类型。YAML 未显式声明 auth.supported 时按框架兜底：
+# - api（如 M-Team）：只走 API-Key
+# - nexusphp：既可粘 cookie，也可账号密码模拟登录
+_DEFAULT_AUTH_BY_FRAMEWORK: dict[str, tuple[str, ...]] = {
+    "api": ("apikey",),
+    "nexusphp": ("cookie", "credential"),
+}
+
+# 合法的授权类型取值（与 movieclaw_db 的 AuthType 保持一致；此处用字符串避免
+# tracker 反向依赖 db 层，保持纯领域库无外部依赖）
+_VALID_AUTH_TYPES = frozenset({"cookie", "apikey", "credential"})
+
+
 @dataclass(frozen=True)
 class SiteConfig:
     """注册的 PT 站点完整配置。"""
@@ -25,11 +38,21 @@ class SiteConfig:
     base_url: str
     framework: str
     site_class: type[BaseSite]
+    # 网页访问域名（用户在浏览器打开的地址）。仅当与 base_url 不同才需配置：
+    # API 类站点（如 M-Team）请求走 api.m-team.cc，但给用户展示的种子详情
+    # 链接必须指向网页域名 tp.m-team.cc。None 表示与 base_url 相同。
+    web_base_url: str | None = None
     selectors: Any | None = None
     category_map: dict[TorrentCategory, list[str]] = field(default_factory=dict)
     http2: bool = False
     timeout: float = 30.0
     max_retries: int = 3
+    # 每站请求最小间隔（秒）：礼貌硬下限。None 表示未在 YAML 显式配置，
+    # 由限流器回退到全局默认值；显式设了就用这个值。
+    min_request_interval: float | None = None
+    # 该站点支持的授权类型（供上层"可选项"展示，用户从中选一种来配置）
+    # 用字符串元组，取值为 cookie / apikey / credential
+    supported_auth_types: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +92,27 @@ def _import_class(dotted_path: str) -> type[BaseSite]:
     module = importlib.import_module(module_path)
     cls = getattr(module, class_name)
     return cls
+
+
+def _parse_supported_auth_types(raw: dict[str, Any], framework: str) -> tuple[str, ...]:
+    """解析站点支持的授权类型。
+
+    优先取 YAML 的 ``auth.supported``；未声明则按 framework 兜底。
+    非法取值会被过滤并告警，避免脏配置流到上层。
+    """
+    auth_section = raw.get("auth") or {}
+    declared = auth_section.get("supported")
+    if declared is None:
+        return _DEFAULT_AUTH_BY_FRAMEWORK.get(framework, ())
+
+    result: list[str] = []
+    for item in declared:
+        value = str(item).lower()
+        if value not in _VALID_AUTH_TYPES:
+            logger.warning("站点 %s 声明了未知授权类型 '%s'，已忽略", raw.get("site_id"), value)
+            continue
+        result.append(value)
+    return tuple(result)
 
 
 def _parse_category_map(raw: dict[str, Any]) -> dict[TorrentCategory, list[str]]:
@@ -116,6 +160,7 @@ def load_all_sites() -> None:
         site_id = raw.get("site_id", "")
         framework = raw.get("framework", "")
         category_map = _parse_category_map(raw)
+        supported_auth_types = _parse_supported_auth_types(raw, framework)
 
         # 确定站点类和选择器
         # 若同时指定了 custom_class 和 framework，则：
@@ -158,6 +203,7 @@ def load_all_sites() -> None:
                 site_id=site_id,
                 display_name=raw.get("display_name", site_id),
                 base_url=raw.get("base_url", ""),
+                web_base_url=raw.get("web_base_url"),
                 framework=framework,
                 site_class=site_class,
                 selectors=selectors,
@@ -165,5 +211,7 @@ def load_all_sites() -> None:
                 http2=raw.get("http2", False),
                 timeout=raw.get("timeout", 30.0),
                 max_retries=raw.get("max_retries", 3),
+                min_request_interval=raw.get("min_request_interval"),
+                supported_auth_types=supported_auth_types,
             )
         )

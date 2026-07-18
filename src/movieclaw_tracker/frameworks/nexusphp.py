@@ -85,7 +85,8 @@ class NexusPHPSite(BaseSite):
         )
 
     async def get_torrent_detail(self, url: str) -> TorrentDetail:
-        full_url = self._ensure_absolute(url)
+        # url 可能是网页域名的 detail_url，抓取前换回请求域名（base_url）
+        full_url = self._to_request_url(self._ensure_absolute(url))
         response = await self.client.get(full_url)
         doc = Selector(text=response.text)
 
@@ -172,17 +173,24 @@ class NexusPHPSite(BaseSite):
             else False
         )
 
+        # 上传/下载量：页面上是可读文本（如 "1.5 TB"），同时换算成字节数，
+        # 供数据库快照与前端统一格式化使用（文本各站格式不一）
+        uploaded_text = self._field_str(doc, self.selectors.profile_uploaded_css)
+        downloaded_text = self._field_str(doc, self.selectors.profile_downloaded_css)
+
         return UserProfile(
             user_id=user_id or "",
             username=username,
             user_class=self._field_str(doc, self.selectors.profile_class_css),
             vip_group=vip_group,
-            uploaded=self._field_str(doc, self.selectors.profile_uploaded_css),
-            downloaded=self._field_str(doc, self.selectors.profile_downloaded_css),
+            uploaded=uploaded_text,
+            uploaded_bytes=self._parse_size_bytes(uploaded_text) or 0,
+            downloaded=downloaded_text,
+            downloaded_bytes=self._parse_size_bytes(downloaded_text) or 0,
             ratio=ratio,
             bonus=bonus,
-            seeding_count=self._parse_int(seeding_text) or 0,
-            leeching_count=self._parse_int(leeching_text) or 0,
+            seeding_count=seeding_count or 0,
+            leeching_count=leeching_count or 0,
             join_date=None,
         )
 
@@ -190,7 +198,7 @@ class NexusPHPSite(BaseSite):
 
     def _parse_promo(
         self, row: Selector
-    ) -> tuple[float, float, "datetime | None"]:
+    ) -> tuple[float, float, datetime | None]:
         """解析单行的促销信息，返回 (下载系数, 上传系数, 截止时间)。
 
         按 promo_download_rules / promo_upload_rules 中声明的顺序逐条匹配，
@@ -235,7 +243,7 @@ class NexusPHPSite(BaseSite):
 
         return download_factor, upload_factor, deadline
 
-    def _parse_upload_time(self, row: Selector) -> "datetime | None":
+    def _parse_upload_time(self, row: Selector) -> datetime | None:
         """解析种子的发布时间。
 
         优先从 span[title] 的 title 属性取精确时间戳（页面显示 "X小时前"
@@ -291,6 +299,13 @@ class NexusPHPSite(BaseSite):
         # 促销解析
         dl_factor, ul_factor, free_deadline = self._parse_promo(row)
 
+        # H&R 标记：仅在站点配置了选择器时给出 True/False，否则保持 None（未知）
+        hit_and_run = (
+            bool(row.css(self.selectors.torrent_hr_css))
+            if self.selectors.torrent_hr_css
+            else None
+        )
+
         # 发布时间
         upload_time = self._parse_upload_time(row)
 
@@ -316,7 +331,9 @@ class NexusPHPSite(BaseSite):
             free_deadline=free_deadline,
             download_volume_factor=dl_factor,
             upload_volume_factor=ul_factor,
-            detail_url=self._ensure_absolute(detail_href) if detail_href else None,
+            hit_and_run=hit_and_run,
+            # detail_url 给用户在浏览器打开，用网页域名；download_url 由程序请求，用 base_url
+            detail_url=self._ensure_absolute_web(detail_href) if detail_href else None,
             download_url=self._ensure_absolute(download_href) if download_href else None,
         )
 
@@ -374,6 +391,13 @@ class NexusPHPSite(BaseSite):
         if url.startswith(("http://", "https://")):
             return url
         return urljoin(self.base_url + "/", url)
+
+    def _ensure_absolute_web(self, url: str) -> str:
+        """同 _ensure_absolute，但用网页域名拼接——仅用于给用户展示的链接
+        （如 detail_url）。未配置 web_base_url 时与 _ensure_absolute 等价。"""
+        if url.startswith(("http://", "https://")):
+            return url
+        return urljoin(self.web_base_url + "/", url)
 
     @staticmethod
     def _css_text(sel: Selector, css: str) -> str | None:

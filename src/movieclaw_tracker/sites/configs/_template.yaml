@@ -3,15 +3,32 @@
 
 site_id: your_site_id          # 唯一标识，小写下划线
 display_name: Your Site Name   # 显示名称
-base_url: https://example.com  # 站点根 URL
+base_url: https://example.com  # 站点根 URL（程序发请求用的地址）
 framework: nexusphp            # 框架类型: nexusphp | api
+
+# 可选：网页访问域名。仅当与 base_url 不同才需配置（如 API 类站点：请求走
+# api.xxx.com，但给用户展示的种子详情链接要指向网页域名）。不配置则等于 base_url。
+# web_base_url: https://www.example.com
+
+# 支持的授权类型（用户配置本站点时可选的方式，从中选一种填写对应信息）
+# 取值：cookie（粘贴浏览器 cookie）| credential（账号密码模拟登录）| apikey（API 密钥）
+# 不声明时按 framework 兜底：nexusphp → [cookie, credential]，api → [apikey]
+# auth:
+#   supported: [cookie, credential]
 
 # 可选：HTTP 配置
 # http2: false
 # timeout: 30.0
 # max_retries: 3
 
+# 可选：每站请求最小间隔（秒）——礼貌硬下限，两次请求之间至少隔这么久（另加随机抖动）。
+# 不设置则用全局默认值（3.0s）。对站点越保守越好；走官方 API 的站可适当放宽。
+# min_request_interval: 3.0
+
 # 仅列出需要覆盖的选择器（会合并到框架默认值上）
+# 常用可覆盖项：
+#   torrent_hr_css: "img.hitandrun"   # H&R 考核标记；各站类名不同，逐站确认后再配，
+#                                     # 不配置时该字段保持"未知"，不会误报成无考核
 selectors: {}
 
 # 站点分类 ID → 应用级分类映射

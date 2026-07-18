@@ -1,38 +1,182 @@
 @import "tailwindcss";
 
+/*
+ * Movieclaw 控制台 —— 冷调「银玻璃」主题（液态玻璃 · Bing 式氛围底）
+ * ------------------------------------------------------------------
+ * 设计语言：沉浸式左右分区（参考 Codex 桌面端）+ 半透明「液态玻璃」表面。
+ * - 背景：不用照片，改用纯 CSS 冷调「抽象光斑」（多层 radial-gradient 光晕），
+ *   透过半透明玻璃面板隐约透出，复刻 Bing「大图氛围底」的空间纵深感。
+ * - 表面：更透、更强的背景模糊 —— 玻璃质感是视觉主角，让底部冷光渗上来。
+ * - 强调：不用彩色。以「冷银高光」替代原先的影院红→琥珀，克制、专业、通透。
+ *   （参考 Bing 无边框 + 极软阴影 + 冷色聚焦环的处理。）
+ * - 字体：拉丁/数字用 Inter，中文交给系统 PingFang SC。
+ */
+
 :root {
-  --background: #f3efe4;
-  --foreground: #111111;
-  --muted: rgba(17, 17, 17, 0.68);
-  --panel: rgba(255, 255, 255, 0.72);
-  --panel-strong: rgba(255, 255, 255, 0.9);
-  --line: rgba(17, 17, 17, 0.1);
-  --accent: #ff6a3d;
-  --accent-strong: #c6451b;
-  --success: #166534;
-  --danger: #991b1b;
-  --shadow: 0 18px 60px rgba(31, 25, 17, 0.08);
-  --font-sans: "Manrope", "Avenir Next", "Segoe UI", sans-serif;
-  --font-mono: "IBM Plex Mono", "SFMono-Regular", "Consolas", monospace;
+  color-scheme: dark;
+
+  /* —— 分层表面（冷调近黑；比原先更透，以透出底部光斑 = 更强玻璃感） —— */
+  --bg: #0a0b10;
+  --surface-sidebar: rgba(20, 22, 30, 0.55);
+  --surface-main: rgba(13, 15, 21, 0.42);
+  --surface-raised: rgba(30, 33, 43, 0.74); /* 浮层：菜单 / 卡片 */
+  --surface-inset: rgba(255, 255, 255, 0.05); /* 内嵌：输入框 */
+
+  /* —— 文本层级（冷白） —— */
+  --text: #f3f5f9;
+  --text-muted: rgba(243, 245, 249, 0.62);
+  --text-faint: rgba(243, 245, 249, 0.36);
+
+  /* —— 描边（更柔，趋近 Bing 的「无边 + 软阴影」） —— */
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.15);
+
+  /* —— 强调：近乎无色 · 银玻璃（冷银高光，不用彩色） —— */
+  --accent: #cdd6e6; /* 冷银 */
+  --accent-strong: #eef2f8; /* 亮银高光 */
+  --accent-2: #9fb0c9; /* 银蓝暗侧 */
+  --accent-soft: rgba(205, 214, 230, 0.14);
+  --accent-ring: rgba(200, 218, 255, 0.55); /* 聚焦环：极淡冷光（借鉴 Bing 蓝环，但去色） */
+
+  /* —— 行内玻璃填充（可点击行的 hover / active） —— */
+  --glass-fill: rgba(255, 255, 255, 0.04);
+  --glass-fill-hover: rgba(255, 255, 255, 0.075);
+  --glass-fill-active: rgba(255, 255, 255, 0.12);
+
+  /* 语义色（任务状态，冷调对齐） */
+  --ok: #5fd39a;
+  --info: #7fb0ff;
+  --danger: #ff6b6b;
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system,
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
 }
 
 * {
   box-sizing: border-box;
 }
 
-html {
-  min-height: 100%;
-  background:
-    radial-gradient(circle at top left, rgba(255, 124, 66, 0.22), transparent 28%),
-    radial-gradient(circle at top right, rgba(255, 211, 123, 0.24), transparent 24%),
-    linear-gradient(180deg, #f7f1e7 0%, #efe6d8 100%);
+html,
+body {
+  height: 100%;
 }
 
 body {
-  min-height: 100vh;
   margin: 0;
-  color: var(--foreground);
+  color: var(--text);
   font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  letter-spacing: -0.005em;
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+/*
+ * 站点铺底：默认为固定色调的深石墨蓝渐变底（public/backdrop-default.jpg，
+ * 由构建脚本生成的斜向渐变 + 左上冷光晕 + 防色带噪声），用户可在外观设置换成
+ * 自己的图。其上叠一层冷调 radial-gradient 光晕 + 竖向暗渐变蒙版：
+ *   1) 蒙版压暗底图，保证半透明玻璃面板与文字始终可读；
+ *   2) 冷色光晕（靛蓝 / 淡紫 / 青）与银冷主题呼应。
+ * 这张图同时被液态玻璃着色器采样做折射（见 lib/glass.ts 的 BACKDROP），二者须为同一张。
+ */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(58% 48% at 16% 8%, rgba(96, 130, 220, 0.18), transparent 62%),
+    radial-gradient(54% 44% at 88% 14%, rgba(140, 104, 214, 0.14), transparent 60%),
+    radial-gradient(64% 58% at 80% 92%, rgba(64, 150, 186, 0.13), transparent 64%),
+    linear-gradient(180deg, rgba(9, 11, 17, 0.1) 0%, rgba(6, 7, 13, 0.32) 100%),
+    /* --backdrop-image 由 BackdropProvider 按用户上传的图动态写入；未设置时回退到内置色调底图 */
+    var(--backdrop-image, url("/backdrop-default.jpg")) center / cover no-repeat;
+  background-color: var(--bg);
+}
+
+/*
+ * 全屏背景蒙版：铺在背景大图之上、内容之下的深色模糊层，
+ * z-index 介于 body::before(0) 与 .app-shell(10) 之间：压住背景、托住其上的内容与侧栏。
+ * 全站统一只有这一档（除「新任务」首页大图直出外，所有页面一律铺它，
+ * 显隐由 app-shell 统一控制，新增页面自动继承、无需登记）。
+ * 模糊度与压暗程度由用户偏好驱动（ui.preferences.scrim → --scrim-blur /
+ * --scrim-dark，见 lib/ui-prefs.tsx），设置里的滑杆全站即时生效；
+ * 变量未就绪时兜底为默认值（浅暗 0.45 + 轻模糊 3px，背景大图隐约透出）。
+ */
+.page-scrim,
+.search-palette-overlay {
+  background: rgb(5 7 12 / var(--scrim-dark, 0.45));
+  backdrop-filter: blur(var(--scrim-blur, 3px));
+  -webkit-backdrop-filter: blur(var(--scrim-blur, 3px));
+}
+.page-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  animation: page-scrim-in 240ms ease both;
+  /* 注意：这里不能给 backdrop-filter / background-color 加 transition——
+     Chromium 对「仅因 CSS 变量变化引起的属性变化」不会正确走过渡，
+     值会卡在旧档不更新（滑杆拖不动的元凶）。全站现在只有一档蒙版，
+     值只在用户拖滑杆时变化，本就要即时跟手，无需过渡。 */
+}
+@keyframes page-scrim-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/*
+ * 沉浸页蒙版（Agent 对话页）：与 .page-scrim 同层同显隐逻辑，但完全不透明——
+ * 密集文本页整页不允许透出背景大图。底色用中性近黑（不带全站的冷蓝调），
+ * 对齐桌面端 AI 产品的阅读配色（见下方 .immersive-theme）。
+ */
+.page-solid {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  background: #0f0f10;
+  animation: page-scrim-in 240ms ease both;
+}
+/* 沉浸路由标记（immersive-route）：layout.tsx 的内联脚本在首帧绘制前打上、
+   AppShell 在客户端路由切换时同步。/runs 下背景大图的伪元素整个不渲染
+   （不渲染 = 浏览器不会下载这张图），纯色层直接实底、不做淡入——
+   强刷对话页时不会闪出背景图。 */
+html.immersive-route body::before {
+  content: none;
+  /* 仅 content:none 不够——Chromium 仍会解析未生成伪元素的 background 并
+     预取图片（包括 --backdrop-image 变量更新时）。置空才真正不发请求 */
+  background: none;
+}
+html.immersive-route .page-solid {
+  animation: none;
+}
+
+/*
+ * —— 沉浸页阅读主题（Agent 对话容器） ——
+ * 模仿 ChatGPT/Codex 桌面端的阅读版式：中性灰阶文字（去掉全站冷白的蓝调）、
+ * 系统字体栈（Latin 走 SF Pro/Segoe，中文照旧 PingFang）。只在对话页容器内
+ * 覆盖文字变量，全站其他页面的冷调玻璃语言不受影响。
+ */
+.immersive-theme {
+  font-family:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", ui-sans-serif, system-ui,
+    "PingFang SC", "Segoe UI", sans-serif;
+  --text: #ececec;
+  --text-muted: rgba(236, 236, 236, 0.6);
+  --text-faint: rgba(236, 236, 236, 0.38);
+  /* 工具调用标签：中性主题下去掉银蓝调，用浅灰承接 code 质感 */
+  --accent-2: #c9cdd3;
+  color: var(--text);
 }
 
 a {
@@ -40,13 +184,621 @@ a {
   text-decoration: none;
 }
 
-button,
-input,
-textarea,
-select {
+button {
   font: inherit;
+  color: inherit;
+  cursor: pointer;
 }
 
-::selection {
-  background: rgba(255, 106, 61, 0.18);
+/*
+ * 统一的键盘聚焦环（去色的冷光，借鉴 Bing 蓝环手法）。
+ * 注意：不含 input/textarea —— 文本输入的聚焦指示改由其外层容器承载
+ * （见 .field-shell / .composer-shell），避免「框中又套一个内环」的双环问题。
+ */
+:where(button, a, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+
+/*
+ * 文本输入容器：聚焦(:focus-within)时由「容器」统一显示一圈细指示环，
+ * 内部 input/textarea 自身已 outline-none（不各画各的），从根本上消除嵌套双环。
+ * 用无 @layer 的普通规则书写，保证稳定压过 Tailwind 工具类。
+ */
+.field-shell {
+  transition: box-shadow 160ms ease, background-color 160ms ease;
+}
+.field-shell:focus-within {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-ring) 55%, transparent);
+}
+/* composer 静止即带投影，聚焦时叠加指示环并加深投影（保留投影不闪断） */
+.composer-shell {
+  transition: box-shadow 160ms ease;
+}
+.composer-shell:focus-within {
+  box-shadow:
+    0 8px 30px rgba(0, 0, 0, 0.32),
+    inset 0 0 0 1px color-mix(in srgb, var(--accent-ring) 55%, transparent);
+}
+
+/* 数字等宽（时间、计数），排版更整齐 */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* 横滚海报行：隐藏原生滚动条（翻页交给两侧箭头与触控板横扫），保持画面干净 */
+.scroll-none {
+  scrollbar-width: none;
+}
+.scroll-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* —— 细滚动条 —— */
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+.scroll-thin::-webkit-scrollbar {
+  width: 9px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+.scroll-thin::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.26);
+  background-clip: content-box;
+}
+
+/*
+ * —— AI 回复正文的 Markdown 排版（components/markdown.tsx） ——
+ * 颜色全部走 CSS 变量，在 .immersive-theme 内自动切到中性灰阶。
+ * 字号/行高与原纯文本正文一致（15px/28px），保证切换渲染器不跳版式。
+ */
+.markdown {
+  font-size: 15px;
+  line-height: 28px;
+  color: var(--text);
+  word-break: break-word;
+}
+.markdown > * + * {
+  margin-top: 0.75em;
+}
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+  font-weight: 600;
+  line-height: 1.4;
+}
+.markdown > * + h1,
+.markdown > * + h2,
+.markdown > * + h3,
+.markdown > * + h4 {
+  margin-top: 1.4em;
+}
+.markdown h1 {
+  font-size: 1.25em;
+}
+.markdown h2 {
+  font-size: 1.15em;
+}
+.markdown h3,
+.markdown h4 {
+  font-size: 1.05em;
+}
+.markdown ul,
+.markdown ol {
+  padding-left: 1.5em;
+}
+.markdown ul {
+  list-style: disc;
+}
+.markdown ol {
+  list-style: decimal;
+}
+.markdown li + li {
+  margin-top: 0.3em;
+}
+.markdown li > ul,
+.markdown li > ol {
+  margin-top: 0.3em;
+}
+/* GFM 任务列表：去掉原生序号缩进，checkbox 顶替列表符 */
+.markdown li:has(> input[type="checkbox"]) {
+  list-style: none;
+  margin-left: -1.5em;
+}
+.markdown input[type="checkbox"] {
+  margin-right: 0.45em;
+  vertical-align: -0.1em;
+}
+.markdown a {
+  color: #8ab4ff;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: rgba(138, 180, 255, 0.4);
+}
+.markdown a:hover {
+  text-decoration-color: currentColor;
+}
+.markdown code {
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.86em;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 5px;
+  padding: 0.15em 0.4em;
+}
+.markdown pre {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  line-height: 1.6;
+}
+.markdown pre code {
+  background: none;
+  border-radius: 0;
+  padding: 0;
+  font-size: 12.5px;
+}
+.markdown blockquote {
+  border-left: 3px solid rgba(255, 255, 255, 0.14);
+  padding-left: 0.9em;
+  color: var(--text-muted);
+}
+.markdown hr {
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  margin: 1.4em 0;
+}
+.markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.93em;
+}
+.markdown th,
+.markdown td {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 6px 12px;
+  text-align: left;
+}
+.markdown th {
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/*
+ * —— 工具调用卡片里的代码展示（components/highlighted-code.tsx） ——
+ * shiki 输出的 <pre> 自带主题底色，这里压掉让它贴合卡片自身的玻璃底；
+ * 长命令/长参数强制换行完整展示，超长内容由卡片外层限高滚动。
+ */
+.code-highlight pre {
+  margin: 0;
+  padding: 4px 0;
+  background: transparent !important;
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/*
+ * 侧栏 / 内容区现在都是 GlassPanel（真实 WebGL 玻璃）承载，玻璃本身负责
+ * 透出并折射背景大图。这里只保留一层 WebGL 不可用时的兜底底色，避免白屏；
+ * 正常渲染时它被上方的玻璃 canvas 覆盖、不可见。
+ * 侧栏更深、内容区更浅，与各自玻璃预设的 darkTint 对应。
+ */
+.panel--sidebar {
+  /* --glass-fallback：兜底色强度系数（0~1，GlassPanel 按侧栏透明度写入）。
+     玻璃走 opacity 材质淡出时兜底色必须同步淡出，否则它会顶上来挡住页面。 */
+  background: rgb(7 8 12 / calc(0.9 * var(--glass-fallback, 1)));
+}
+.panel--main {
+  background: rgba(9, 11, 17, 0.72);
+}
+/* 沉浸页（Agent 对话）的实色侧栏：不透玻璃、不折射背景大图，
+   中性灰（与 .page-solid 同调）略抬一档 + 发丝描边，保留浮起卡片的形状语言 */
+.panel--sidebar-flat {
+  background: #171719;
+  border-radius: 16px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+/*
+ * 真实 WebGL 液态玻璃面板（见 components/glass-panel.tsx）。
+ * canvas 铺满容器、置于内容层之下，内容层照常承载布局与交互。
+ * 玻璃本身负责透出并折射背景大图，故这里不再叠 CSS 模糊/半透明底色。
+ */
+.glass-panel {
+  position: relative;
+  isolation: isolate;
+  /* 高度不写死：满高面板用处传 h-full，输入框等卡片则自适应内容高度 */
+  /* 圆角裁切 canvas 四角；border-radius 由组件按 radius 内联设置 */
+  overflow: hidden;
+  /* 悬浮感：柔和外投影（玻璃边缘亮边由 WebGL 的 edgeHighlight 负责）。
+     投影强度吃 --glass-fallback 系数：玻璃用 opacity 整体淡出时投影须同步淡出，
+     否则玻璃隐去后仍留下一圈面板形状的暗晕（见 lib/glass.ts 的 sidebarGlass）。 */
+  box-shadow:
+    0 24px 70px -18px rgb(0 0 0 / calc(0.62 * var(--glass-fallback, 1))),
+    0 8px 24px -10px rgb(0 0 0 / calc(0.5 * var(--glass-fallback, 1)));
+}
+/* 内容层顶上一圈极淡玻璃亮边，压在 canvas 之上才可见。
+   不透明度可被 --glass-hairline 覆盖：侧栏透明度调高时淡出这条线
+   （由 GlassPanel 的 hairlineAlpha 入参写入，见 lib/glass.ts 的 sidebarGlass）。 */
+.glass-panel__content::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, var(--glass-hairline, 0.07));
+}
+.glass-panel__canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.glass-panel__content {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+  border-radius: inherit;
+}
+
+/*
+ * 浮层表面（菜单、卡片）：比面板更亮一档，带柔和投影，表达「抬升」。
+ * 顶部一道内高光模拟玻璃边缘的受光。
+ */
+.surface-raised {
+  position: relative;
+  background: var(--surface-raised);
+  backdrop-filter: blur(22px) saturate(1.4);
+  -webkit-backdrop-filter: blur(22px) saturate(1.4);
+  border-radius: 16px;
+  box-shadow:
+    0 18px 44px rgba(0, 0, 0, 0.5),
+    0 2px 8px rgba(0, 0, 0, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+/*
+ * 设置内容区的子卡片（个人信息 / 字段组 / 开关组 / 站点配置等）。
+ * 现只用于设置模式，承载在近黑玻璃面板之上。质感对齐参考站 Component Studio 的元素：
+ * 不是「浮起的实心灰块 + 重投影」，而是「玻璃上的一层极淡白色磨砂内嵌」——
+ *   半透白填充 + 顶部一道受光高光渐变 + 发丝白描边 + 一线内高光，去掉重外投影。
+ * 层次靠通透度拉开，卡片自然融进深色面板，与内部行（bg-white/.03）语言一致。
+ * 注意：浮层菜单是另一个同源类 .surface-raised（需要不透明+投影来漂浮分离），不走这套。
+ */
+.css-glass {
+  position: relative;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.06),
+      rgba(255, 255, 255, 0) 46%
+    ),
+    rgba(255, 255, 255, 0.045);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09);
+}
+
+/*
+ * 可点击行：侧栏导航、探索、最近运行、菜单项等。
+ */
+.glass-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  text-align: left;
+  transition:
+    background 150ms ease,
+    color 150ms ease,
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+.glass-row:hover {
+  background: var(--glass-fill-hover);
+  color: var(--text);
+}
+.glass-row[data-active="true"] {
+  background: var(--glass-fill-active);
+  color: var(--text);
+}
+
+/*
+ * 导航激活态（对齐参考站 liquid-glass-oss 的选中项）：一块「浮起的圆角亮胶囊」——
+ * 更亮的竖向渐变填充 + 一圈极淡描边 + 顶部内高光 + 柔和外投影，
+ * 在同色列表里明确「抬升」出选中项，靠色块与阴影表达，不用左侧指示条。
+ */
+.nav-item[data-active="true"] {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.16),
+    rgba(255, 255, 255, 0.085)
+  );
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 6px 16px -6px rgba(0, 0, 0, 0.45);
+}
+
+/*
+ * 列表行左侧图标徽标（对齐参考站列表项的圆形首字母徽标，这里承载图标）：
+ * 平时是深色玻璃圆角方块 + 顶部内高光；hover 略提亮；选中行内变成亮银徽标+深墨图标，
+ * 与选中胶囊一起「抬升」。尺寸由使用处用 Tailwind size-* 指定。
+ */
+.icon-chip {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  transition: background 150ms ease, color 150ms ease, box-shadow 150ms ease;
+}
+.glass-row:hover .icon-chip {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+}
+.nav-item[data-active="true"] .icon-chip {
+  background: linear-gradient(145deg, #f4f7fc 0%, #b7c2d6 100%);
+  color: #141821;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+/* 分组小标题 */
+.group-label {
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* 直接压在背景大图上的文字：叠一层柔和暗投影，保证在亮画面上也读得清 */
+.text-on-image {
+  text-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.5),
+    0 2px 16px rgba(0, 0, 0, 0.55);
+}
+
+/* 标题的微妙高光（白 → 略灰的竖向渐变），更有质感 */
+.text-sheen {
+  background: linear-gradient(180deg, #ffffff 0%, rgba(243, 245, 249, 0.66) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/*
+ * 主操作按钮：亮「银玻璃」—— 浅色玻璃 + 深色墨字。
+ * 借鉴 Bing 白色搜索胶囊：明亮、通透、无彩色，靠高光与软阴影表达质感。
+ */
+.btn-accent {
+  background: linear-gradient(145deg, #f6f8fc 0%, #ccd6e6 100%);
+  color: #141821;
+  box-shadow:
+    0 6px 18px rgba(180, 198, 230, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  transition:
+    filter 150ms ease,
+    transform 120ms ease,
+    box-shadow 150ms ease;
+}
+.btn-accent:hover {
+  filter: brightness(1.04);
+}
+.btn-accent:active {
+  transform: scale(0.96);
+}
+
+/*
+ * 次级玻璃胶囊按钮：设置页的「编辑 / 刷新 / 取消」等次要操作。
+ * 与侧栏「新任务」同一语言：极暗半透填充 + 发丝描边 + 一线内高光，
+ * 比无边框的 .glass-row 多一圈可见轮廓，在深色底上能被一眼认出是按钮。
+ * 主操作则用亮银 .btn-accent，二者构成明确的主次层级。
+ */
+.btn-glass {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease;
+}
+.btn-glass:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+.btn-glass:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* —— 液态玻璃动作按钮（新任务 / 发送）的悬停反馈 ——
+   组件本身只有按下(scale .96)和焦点态，没有 hover。这里补一层：
+   1) 轻微上浮，给出「可点」的即时反馈；
+   2) 借用组件自带的白色高光面(__active-surface)做一层极弱的提亮，
+      模拟玻璃在指针下被点亮的质感（这两个按钮平时不进入 active 态，
+      所以这层高光只在 hover 时出现，不会与选中态冲突）。 */
+.lg-nav-cta,
+.lg-send {
+  transition:
+    transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    filter 160ms ease;
+}
+.lg-nav-cta:hover:not(.is-pressed),
+.lg-send:hover:not(.is-pressed) {
+  transform: translateY(-1px);
+  filter: brightness(1.08);
+}
+.lg-nav-cta:hover .lg-icon-button__active-surface,
+.lg-send:hover .lg-icon-button__active-surface {
+  opacity: 0.1;
+  transform: scale(1);
+}
+
+/* 命令面板层级：vendor 默认 z-index:8，但本应用外壳 (.app-shell) 是 z-10，
+   若不抬高，Portal 到 body 后的浮层仍会被外壳内容盖住。抬到 50 稳压全站之上。 */
+.lg-command-overlay {
+  z-index: 50;
+}
+
+/* 主界面后推纵深（Spotlight 式）：命令面板打开时（body.cmdk-open），整个外壳轻微
+   缩放后退，配合浮层的全局蒙版做出「主界面退后一层、面板浮于其上」的层次感。
+   不再额外压暗外壳，避免绕过用户设置叠加第二层固定暗度。
+   面板本身 Portal 到 body、不在 .app-shell 内，故不受此缩放影响。
+   transform-origin 居中，缩放后四周露出 body 的深色背景渐变，纵深感更明确。 */
+.app-shell {
+  transform-origin: center center;
+  transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+body.cmdk-open .app-shell {
+  transform: scale(0.978);
+}
+
+/* 搜索命令面板（components/search-command.tsx）：纯 CSS 深色实心浮层
+   （Raycast/Spotlight 式），非 WebGL 玻璃。遮罩与全站 .page-scrim 共用颜色、
+   暗度和模糊度，因此会同步响应「外观」中的蒙版设置；面板入场 160ms 下落
+   + 缩放，退出即时卸载（对齐 Raycast 的干脆手感，不做出场动画）。 */
+@keyframes search-palette-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes search-palette-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.985);
+  }
+}
+.search-palette-overlay {
+  animation: search-palette-fade-in 140ms ease-out;
+}
+.search-palette-panel {
+  animation: search-palette-pop-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* 品牌 / 头像徽标：银玻璃渐变 + 顶部高光 */
+.brand-badge {
+  background: linear-gradient(145deg, #f4f7fc 0%, #b7c2d6 100%);
+  color: #141821;
+  box-shadow:
+    0 4px 14px rgba(160, 182, 220, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+/*
+ * 玻璃滑杆（设置 → 外观 → 界面质感）：原生 input[type=range] 换装。
+ * 轨道 = 发丝描边的暗玻璃细条，滑块 = 与 .btn-accent 同语言的亮银圆钮，
+ * 在深色蒙版上主次分明。WebKit 与 Firefox 的伪元素需分开声明（不可合并选择器）。
+ */
+.range-glass {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 20px;
+  background: transparent;
+  cursor: pointer;
+}
+.range-glass:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.range-glass::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+.range-glass::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  margin-top: -6px; /* (thumb 16 - track 4) / 2，让圆钮垂直居中在轨道上 */
+  height: 16px;
+  width: 16px;
+  border-radius: 999px;
+  border: none;
+  background: linear-gradient(145deg, #f6f8fc 0%, #ccd6e6 100%);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+.range-glass::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+.range-glass::-moz-range-thumb {
+  height: 16px;
+  width: 16px;
+  border-radius: 999px;
+  border: none;
+  background: linear-gradient(145deg, #f6f8fc 0%, #ccd6e6 100%);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+.range-glass:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 2px;
+  border-radius: 999px;
+}
+
+/* —— 搜索等待态：骨架 shimmer 与进度条扫光（见 components/search-results.tsx） —— */
+@keyframes search-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+.skeleton-block {
+  display: inline-block;
+  background-color: rgba(255, 255, 255, 0.05);
+  background-image: linear-gradient(100deg, transparent 35%, rgba(255, 255, 255, 0.13) 50%, transparent 65%);
+  background-size: 220% 100%;
+  animation: search-shimmer 1.8s linear infinite;
+  /* 各骨架行通过 --stagger 错峰，扫光斜向依次掠过，比整片同步呼吸更有"加载中"的动感 */
+  animation-delay: var(--stagger, 0ms);
+}
+@keyframes search-progress-sweep {
+  from {
+    left: -40%;
+  }
+  to {
+    left: 100%;
+  }
+}
+.progress-sweep {
+  animation: search-progress-sweep 1.1s ease-in-out infinite;
 }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from movieclaw_tracker.auth import (
+    ApiKeyAuthProvider,
     AuthManager,
     AuthProvider,
     CaptchaSolver,
@@ -23,6 +24,7 @@ __all__ = [
     "load_all_sites",
     "CookieAuthProvider",
     "CredentialAuthProvider",
+    "ApiKeyAuthProvider",
     "CaptchaSolver",
     "LoginSelectors",
     "CookieInput",
@@ -73,6 +75,9 @@ async def create_site(
         timeout=config.timeout,
         max_retries=config.max_retries,
         http2=config.http2,
+        # 注入 site_id + 每站间隔：启用按 site_id 全进程共享的请求限流器
+        site_id=config.site_id,
+        min_request_interval=config.min_request_interval,
     )
 
     store = cookie_store or MemoryCookieStore()
@@ -88,6 +93,10 @@ async def create_site(
         "client": client,
         "auth_manager": auth_manager,
     }
+
+    # 网页访问域名与请求域名不同的站点（如 M-Team），额外注入 web_base_url
+    if config.web_base_url:
+        kwargs["web_base_url"] = config.web_base_url
 
     if config.selectors is not None:
         kwargs["selectors"] = config.selectors

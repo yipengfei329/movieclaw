@@ -1,14 +1,37 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import { Inter } from "next/font/google";
 
 import { publicEnv } from "@/lib/env";
 
+// 先引入液态玻璃组件自带的样式，再引入本项目的全局深色主题（后者可覆盖前者）。
+import "@/vendor/liquid-glass/styles.css";
 import "./globals.css";
+
+// 拉丁字符/数字用 Inter（更克制、专业）；中文由 PingFang SC 等系统字体承接。
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-inter",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: publicEnv.appName,
-  description: "Movieclaw Web console scaffold for future multi-client expansion.",
+  description: "Movieclaw 控制台 —— 液态玻璃风格的影视追踪工作台。",
 };
+
+/**
+ * 防背景闪烁（FOUC）：--backdrop-image 正常由 BackdropProvider 在「挂载 +
+ * GET /appearance 返回」之后写入，强刷时首帧会先画出内置默认图再切换、闪一下。
+ * 这段内联脚本在首帧绘制前从 localStorage 恢复上次的背景变量（缓存由
+ * lib/backdrop.tsx 在每次换图时写入；图片 URL 带版本号且强缓存，恢复是瞬时的）。
+ * 只接受站内相对路径，缓存被篡改也注入不了外部地址。
+ *
+ * 沉浸路由（/runs，Agent 对话页）：首帧绘制前给 <html> 打 immersive-route
+ * 标记——背景大图的伪元素整个不渲染（也就不会发起图片请求），纯色层免淡入，
+ * 强刷时不会闪出背景图。此时也无需恢复背景变量。客户端路由切换后的同步由
+ * AppShell 的 effect 负责（见 components/app-shell.tsx）。
+ */
+const RESTORE_BACKDROP_SCRIPT = `try{if(location.pathname.indexOf("/runs")===0){document.documentElement.classList.add("immersive-route")}else{var u=localStorage.getItem("movieclaw.backdrop");if(u&&u.charAt(0)==="/")document.documentElement.style.setProperty("--backdrop-image",'url("'+u+'")')}}catch(e){}`;
 
 export default function RootLayout({
   children,
@@ -16,41 +39,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="zh-CN">
+    // suppressHydrationWarning：body 最前的内联脚本会在水合前就给 <html> 写上
+    // --backdrop-image 内联样式（见下方 RESTORE_BACKDROP_SCRIPT），服务端首帧 HTML
+    // 里没有这个 style，两边必然不一致。这是「首帧防闪烁」的固有代价，用它抑制这一处
+    // 预期内的告警（只作用于 <html> 自身属性，不影响子树里真正的水合问题被暴露）。
+    <html lang="zh-CN" className={inter.variable} suppressHydrationWarning>
       <body>
-        <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-6 py-6 sm:px-8 lg:px-10">
-          <header className="mb-8 rounded-[28px] border border-[var(--line)] bg-[var(--panel)] px-5 py-4 shadow-[var(--shadow)] backdrop-blur md:px-6">
-            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-              <div>
-                <Link href="/" className="text-lg font-semibold tracking-[0.18em] uppercase">
-                  MOVIECLAW
-                </Link>
-                <p className="mt-1 text-sm text-[var(--muted)]">
-                  Web console scaffold for a multi-client product surface.
-                </p>
-              </div>
-              <nav className="flex flex-wrap items-center gap-3 text-sm">
-                <Link
-                  href="/"
-                  className="rounded-full border border-[var(--line)] px-4 py-2 transition hover:border-[var(--accent)] hover:bg-white/60"
-                >
-                  Overview
-                </Link>
-                <Link
-                  href="/health"
-                  className="rounded-full border border-[var(--line)] px-4 py-2 transition hover:border-[var(--accent)] hover:bg-white/60"
-                >
-                  Health Check
-                </Link>
-              </nav>
-            </div>
-          </header>
-          <main className="flex-1">{children}</main>
-          <footer className="mt-8 flex flex-col gap-2 border-t border-black/8 px-1 py-4 text-sm text-[var(--muted)] sm:flex-row sm:items-center sm:justify-between">
-            <span>{publicEnv.appName}</span>
-            <span>FastAPI backend boundary preserved for future desktop and mobile clients.</span>
-          </footer>
-        </div>
+        {/* 必须是 body 最前的同步内联脚本：解析即执行，赶在首帧绘制之前 */}
+        <script dangerouslySetInnerHTML={{ __html: RESTORE_BACKDROP_SCRIPT }} />
+        {children}
       </body>
     </html>
   );

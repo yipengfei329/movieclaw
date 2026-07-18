@@ -1,0 +1,181 @@
+from __future__ import annotations
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from movieclaw_api.exceptions import (
+    BadRequestException,
+    ConflictException,
+    NotFoundException,
+)
+from movieclaw_api.services.auth_factory import missing_required_fields
+from movieclaw_api.services.site_access import invalidate_site_access
+from movieclaw_api.services.site_catalog import SiteCatalogService
+from movieclaw_db.models.site_credential import AuthType, ConfigStatus, SiteCredential
+from movieclaw_db.models.site_user_profile import SiteUserProfile
+from movieclaw_db.repositories.cookie_repo import CookieRepository
+from movieclaw_db.repositories.credential_repo import CredentialRepository
+from movieclaw_db.repositories.profile_repo import ProfileRepository
+from movieclaw_db.repositories.torrent_repo import TorrentRepository
+
+
+class SiteConfigService:
+    """已配置站点服务：用户"可用站点"的增删改查。
+
+    职责边界：
+    - 写入前做**业务校验**（站点是否存在于目录、授权类型是否被支持、必填字段是否齐全）。
+    - 校验通过后落库（状态置 PENDING），真正的有效性验证交给异步验证流程。
+    - 删除配置时**连带清理该站点的 cookie 缓存**，避免残留旧会话。
+
+    并发状态守卫（关键设计）：
+    当某站点正处于 VERIFYING（验证进行中）时，一切"会改动凭据或重复触发验证"的
+    操作——更新、删除、再次验证——都被拒绝（抛 409 冲突）。配套手段是"同步占位"：
+    触发验证时在**当前请求内**就把状态改为 VERIFYING（见 start_verification），
+    而非等后台任务再改，从而关闭并发窗口，让前端立刻看到"验证中"并禁用相关按钮。
+    （启用/停用与验证正交，不受此守卫限制。）
+
+    本服务绑定一个数据库会话；目录校验委托给无状态的 SiteCatalogService。
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+        self._credentials = CredentialRepository(session)
+        self._cookies = CookieRepository(session)
+        self._torrents = TorrentRepository(session)
+        self._profiles = ProfileRepository(session)
+        self._catalog = SiteCatalogService()
+
+    @staticmethod
+    def _assert_not_verifying(row: SiteCredential) -> None:
+        """若站点正在验证中，拒绝当前操作（409）。"""
+        if row.status == ConfigStatus.VERIFYING:
+            raise ConflictException(
+                f"站点 {row.site_id} 正在验证中，请等待验证完成后再操作"
+            )
+
+    # -- 查询 --------------------------------------------------------------
+
+    async def list_configured(self) -> list[SiteCredential]:
+        """返回用户已配置的所有站点（含各自验证状态）。"""
+        return await self._credentials.list_all()
+
+    async def get_configured(self, site_id: str) -> SiteCredential:
+        """获取单个已配置站点；未配置时抛 404。"""
+        row = await self._credentials.get_by_site(site_id)
+        if row is None:
+            raise NotFoundException(f"站点尚未配置：{site_id}")
+        return row
+
+    async def profile_of(self, site_id: str) -> SiteUserProfile | None:
+        """获取某站点的用户资料快照；从未验证成功过则返回 None。
+
+        供路由层把资料嵌进 ConfiguredSite 视图（见 schemas.site.SiteUserProfileView）。
+        """
+        return await self._profiles.get_by_site(site_id)
+
+    async def profiles_of(self, site_ids: list[str]) -> dict[str, SiteUserProfile]:
+        """批量获取多个站点的资料快照（site_id → 快照），列表页一次查完避免 N+1。"""
+        return await self._profiles.get_many(site_ids)
+
+    # -- 写入 --------------------------------------------------------------
+
+    async def configure(
+        self,
+        *,
+        site_id: str,
+        auth_type: AuthType,
+        cookie: str | None = None,
+        api_key: str | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        enabled: bool = True,
+    ) -> SiteCredential:
+        """新增或更新一个站点配置。
+
+        校验顺序：
+        0. 若站点已存在且正在验证中 → 409（不允许边验证边改凭据）。
+        1. 站点必须存在于目录且支持该授权类型（否则 400/404）。
+        2. 该授权类型要求的字段必须填全（否则 400）。
+        校验通过后写库，状态自动重置为 PENDING，等待异步验证。
+        """
+        # 0. 并发守卫：验证进行中不允许修改凭据
+        existing = await self._credentials.get_by_site(site_id)
+        if existing is not None:
+            self._assert_not_verifying(existing)
+
+        # 1. 目录校验：站点存在 + 支持该授权类型
+        self._catalog.assert_auth_type_supported(site_id, auth_type)
+
+        # 2. 必填字段校验
+        values = {
+            "cookie": cookie,
+            "api_key": api_key,
+            "username": username,
+            "password": password,
+        }
+        missing = missing_required_fields(auth_type, values)
+        if missing:
+            raise BadRequestException(
+                f"授权类型 '{auth_type.value}' 缺少必填字段：{', '.join(missing)}"
+            )
+
+        # 3. 落库（状态在 repo 内重置为 PENDING）
+        credential = await self._credentials.upsert(
+            site_id=site_id,
+            auth_type=auth_type,
+            cookie=cookie,
+            api_key=api_key,
+            username=username,
+            password=password,
+            enabled=enabled,
+        )
+        # 4. 建立同步游标：以「此刻」为跟踪起点 t0，next_sync_at 保持 NULL（立即到期），
+        #    使站点通过验证后，下一个 tick 即触发首刷。幂等——已存在则不改动既有 t0。
+        await self._torrents.ensure_cursor(site_id)
+        # 5. 凭据已变更，作废共享客户端缓存，确保下次访问用新授权重建
+        await invalidate_site_access(site_id)
+        return credential
+
+    async def start_verification(self, site_id: str) -> SiteCredential:
+        """同步占位：把站点状态改为 VERIFYING 并返回，随后由调用方排队后台任务。
+
+        这是并发守卫的核心：在请求内就抢占 VERIFYING 状态，使得在后台验证跑完前，
+        任何更新/删除/再次验证都会因看到 VERIFYING 而被拒绝，关闭并发窗口。
+
+        - 未配置 → 404。
+        - 已在验证中 → 409（避免重复触发）。
+        """
+        row = await self.get_configured(site_id)  # 未配置抛 404
+        self._assert_not_verifying(row)  # 已在验证中抛 409
+        await self._credentials.update_status(site_id, ConfigStatus.VERIFYING)
+        return await self.get_configured(site_id)
+
+    async def set_enabled(self, site_id: str, enabled: bool) -> SiteCredential:
+        """启用/停用站点；未配置时抛 404。返回更新后的记录。
+
+        注意：启用/停用与验证状态正交，**刻意不受 VERIFYING 守卫限制** ——
+        用户随时可以停用一个正在验证的站点，二者互不影响。
+        """
+        ok = await self._credentials.set_enabled(site_id, enabled)
+        if not ok:
+            raise NotFoundException(f"站点尚未配置：{site_id}")
+        # 启停影响可访问性，作废共享缓存（停用后再取会被拒、启用后按新状态重建）
+        await invalidate_site_access(site_id)
+        return await self.get_configured(site_id)
+
+    async def delete(self, site_id: str) -> None:
+        """删除站点配置，并连带清理其 cookie 缓存。
+
+        - 未配置 → 404。
+        - 正在验证中 → 409（不允许删除正在被后台任务使用的配置）。
+        """
+        row = await self.get_configured(site_id)  # 未配置抛 404
+        self._assert_not_verifying(row)  # 验证中抛 409
+        await self._credentials.delete(site_id)
+        # 凭据已删，遗留的 cookie 会话也一并清掉
+        await self._cookies.delete(site_id)
+        # 用户资料快照是凭据的派生缓存，随配置一起删除
+        await self._profiles.delete(site_id)
+        # 连带清理该站的本地种子快照与同步游标，避免重新添加时命中过期高水位
+        await self._torrents.delete_site_data(site_id)
+        # 作废共享客户端缓存并释放其连接
+        await invalidate_site_access(site_id)

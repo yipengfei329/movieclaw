@@ -1,0 +1,40 @@
+# OpenAI 官方。base_url 留空走 SDK 默认（https://api.openai.com/v1）。
+# 目录只维护当前主力模型（GPT-5.6 系列，2026-07-09 发布），数据以官方文档
+# 为准（developers.openai.com/api/docs/models，抓取于 2026-07-12）；
+# 用户可通过实例配置的 extra_models 补录未收录的模型。
+#
+# supports_thinking 语义是"思考内容是否通过 API 字段返回"——GPT-5.6 的
+# 推理强度可调（reasoning_effort），但推理过程不通过 Chat Completions
+# 返回，故标 false、无思考预算。
+id: openai
+display_name: OpenAI
+protocol: openai_chat
+base_url: null
+compat:
+  thinking_field: null
+  supports_stream_usage: true
+models:
+  # 旗舰：复杂推理与关键任务
+  - id: gpt-5.6-sol
+    context_window: 1050000
+    max_output_tokens: 128000
+    supports_tools: true
+    supports_parallel_tool_calls: true
+    supports_thinking: false
+    modalities: [text, image]
+  # 均衡：日常编码 / 推理 / agent 任务
+  - id: gpt-5.6-terra
+    context_window: 1050000
+    max_output_tokens: 128000
+    supports_tools: true
+    supports_parallel_tool_calls: true
+    supports_thinking: false
+    modalities: [text, image]
+  # 轻量：成本敏感的大批量任务
+  - id: gpt-5.6-luna
+    context_window: 1050000
+    max_output_tokens: 128000
+    supports_tools: true
+    supports_parallel_tool_calls: true
+    supports_thinking: false
+    modalities: [text, image]

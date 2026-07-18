@@ -1,4 +1,4 @@
-from typing import Any, Generic, Optional, TypeVar
+from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -16,7 +16,7 @@ class ErrorResponse(BaseModel):
     success: bool = False
     code: str
     message: str
-    details: Optional[list[dict[str, Any]]] = Field(default=None)
+    details: list[dict[str, Any]] | None = Field(default=None)
 
 
 def ok(data: T, message: str = "success", code: str = "OK") -> ApiResponse[T]:

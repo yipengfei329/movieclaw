@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
 
-class TorrentCategory(str, Enum):
+class TorrentCategory(StrEnum):
     """应用级一级分类枚举。"""
 
     MOVIE = "movie"
@@ -19,7 +19,7 @@ class TorrentCategory(str, Enum):
     OTHER = "other"
 
 
-class AuthState(str, Enum):
+class AuthState(StrEnum):
     """认证状态。"""
 
     AUTHENTICATED = "authenticated"
@@ -63,11 +63,18 @@ class TorrentListItem(BaseModel):
     upload_time: datetime | None = None
     uploader: str = ""
     poster_url: str | None = None
+    # 全部图片（海报 + 截图等），poster_url 是其中第一张；
+    # 站点不提供（如 HTML 列表页无图）时为空列表。
+    image_urls: list[str] = Field(default_factory=list)
     # 促销信息
     free: bool = False
     free_deadline: datetime | None = None
     download_volume_factor: float = 1.0   # 下载系数，0=全免，0.5=半免，1=正常
     upload_volume_factor: float = 1.0     # 上传系数，2=双倍，1=正常
+    # H&R（Hit-and-Run）考核标记。三态：True=有考核，False=站点标注了无考核，
+    # None=站点不提供该信息 / 未配置选择器——与促销的"缺席即无"不同，H&R 信息
+    # 缺席不代表没有考核，所以不能塌缩成 False。
+    hit_and_run: bool | None = None
     detail_url: str | None = None
     download_url: str | None = None
 
@@ -96,6 +103,9 @@ class TorrentDetail(BaseModel):
     upload_time: datetime | None = None
     uploader: str = ""
     poster_url: str | None = None
+    # 详情页全部图片（海报 + 截图等），poster_url 是其中第一张；
+    # 站点不提供或解析不到时为空列表。
+    image_urls: list[str] = Field(default_factory=list)
     # 促销信息
     free: bool = False
     free_deadline: datetime | None = None

@@ -11,6 +11,8 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
+from movieclaw_tracker.ratelimit import SiteRateLimiter, get_site_limiter
+
 logger = logging.getLogger("movieclaw_tracker.http")
 
 _DEFAULT_HEADERS = {
@@ -44,8 +46,15 @@ class HttpClient:
         headers: dict[str, str] | None = None,
         cookies: dict[str, str] | None = None,
         http2: bool = False,
+        site_id: str | None = None,
+        min_request_interval: float | None = None,
     ) -> None:
         self._max_retries = max_retries
+        # 每站限流器：给了 site_id 才启用（跨临时客户端按 site_id 全进程共享同一闸门）。
+        # 未给 site_id（如单元测试直接构造）则不限流。间隔为 None 时用默认值。
+        self._limiter: SiteRateLimiter | None = (
+            get_site_limiter(site_id, min_request_interval) if site_id else None
+        )
         merged_headers = {**_DEFAULT_HEADERS, **(headers or {})}
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(timeout),
@@ -63,6 +72,15 @@ class HttpClient:
     def cookies(self, value: dict[str, str]) -> None:
         self._client.cookies = httpx.Cookies(value)
 
+    def set_header(self, key: str, value: str) -> None:
+        """设置（或覆盖）一个默认请求头。
+
+        用于 API-Key 等需要在认证后注入到后续所有请求的场景，
+        例如 M-Team 的 ``x-api-key``。cookie 走 cookies 属性，
+        非 cookie 的认证凭据走这里。
+        """
+        self._client.headers[key] = value
+
     async def get(self, url: str, **kwargs: Any) -> httpx.Response:
         return await self._request("GET", url, **kwargs)
 
@@ -79,6 +97,8 @@ class HttpClient:
         适用于登录等需要自行检查响应状态码和内容的场景，
         调用方根据业务语义判断成功/失败，而非依赖 HTTP 状态码。
         """
+        if self._limiter is not None:
+            await self._limiter.acquire()
         return await self._client.request(method, url, **kwargs)
 
     async def raw_get(self, url: str, **kwargs: Any) -> httpx.Response:
@@ -100,6 +120,9 @@ class HttpClient:
             reraise=True,
         )
         async def _do() -> httpx.Response:
+            # 闸门放在每次尝试内部：重试发出的请求同样被节流，不会绕过限流
+            if self._limiter is not None:
+                await self._limiter.acquire()
             response = await self._client.request(method, url, **kwargs)
             response.raise_for_status()
             return response

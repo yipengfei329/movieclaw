@@ -92,6 +92,12 @@ class NexusPHPSelectors:
         ("img.pro_2up", 2.0),
     )
 
+    # -- H&R（Hit-and-Run）标记 --
+    # 命中该选择器的行标记为「有 H&R 考核」。空字符串表示站点不提供 / 未适配，
+    # 此时字段保持 None（未知），不会误报成「无考核」。
+    # 各站类名不同，需逐站确认后在 YAML 覆盖，例："img.hitandrun"。
+    torrent_hr_css: str = ""
+
     # 促销截止时间：从该元素的指定属性中提取日期时间字符串。
     # 空字符串表示不解析截止时间（永久促销或站点不暴露该信息）。
     torrent_promo_deadline_css: str = ""

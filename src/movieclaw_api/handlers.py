@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -26,7 +26,7 @@ def _build_error_response(
     status_code: int,
     code: str,
     message: str,
-    details: Optional[list[dict[str, Any]]] = None,
+    details: list[dict[str, Any]] | None = None,
 ) -> JSONResponse:
     payload = ErrorResponse(code=code, message=message, details=details)
     return JSONResponse(status_code=status_code, content=payload.model_dump(exclude_none=True))

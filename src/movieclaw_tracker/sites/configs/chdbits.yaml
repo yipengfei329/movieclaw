@@ -7,6 +7,12 @@ base_url: https://chdbits.co
 framework: nexusphp
 
 selectors:
+  # ── 分页 ──────────────────────────────────────────────────────────
+  # 彩虹岛（标准 NexusPHP torrents.php）分页从 0 开始：?page=0 才是第一页。
+  # 应用层页码从 1 起算，故发送时需减 1，否则 page=1 会取到"第二页"、漏掉首页
+  # 全部结果（搜索/同步都受影响）。与 ssd 同理。
+  page_offset: -1
+
   # ── 种子列表 ─────────────────────────────────────────────────────
   # 彩虹岛的行结构是 tr > td > table.torrentname，用 :has() 精准匹配数据行
   torrent_row_css: "table.torrents > tr:has(table.torrentname)"
@@ -29,15 +35,17 @@ selectors:
   login_success_css: "a[href='logout.php']"
 
   # ── 用户资料 ──────────────────────────────────────────────────────
-  # 彩虹岛 userdetails 页面使用英文标签，以下选择器按实际页面结构适配
-  # 注：若解析结果为空，可能需要根据实际 HTML 进一步调整
+  # 彩虹岛的资料数据取自页面顶部用户栏：font.color_* 元素只装标签文字
+  # （如 "上传量："），实际数值在其后紧跟的文本节点里（与 SSD 结构相同），
+  # 因此统一用 ::next_sibling_text（XPath following-sibling::text()[1]）提取。
+  # 实测页面片段：<font class='color_uploaded'>上传量：</font> 25.052 TB
   profile_username_css: "a[href^='userdetails.php?id=']"
-  profile_uploaded_css: "font.color_uploaded"
-  profile_downloaded_css: "font.color_downloaded"
-  profile_ratio_css: "font.color_ratio"
-  # seeding / leeching 计数紧跟在图片后面，用 + * 取下一个元素的文本
-  profile_seeding_css: "img[alt='Torrents seeding'] + *"
-  profile_leeching_css: "img[alt='Torrents leeching'] + *"
+  profile_uploaded_css: "font.color_uploaded::next_sibling_text"
+  profile_downloaded_css: "font.color_downloaded::next_sibling_text"
+  profile_ratio_css: "font.color_ratio::next_sibling_text"
+  # 做种/下载计数紧跟在对应 img 图标后面的文本节点里：<img alt="Torrents seeding" ... />2
+  profile_seeding_css: "img[alt='Torrents seeding']::next_sibling_text"
+  profile_leeching_css: "img[alt='Torrents leeching']::next_sibling_text"
   # VIP 用户组：用户名链接的 class 以 VIP 开头
   profile_vip_css: "a[class^='VIP']"
 

@@ -1,5 +1,38 @@
+# M-Team（馒头）站点配置
+# 官网：https://tp.m-team.cc/   API：https://api.m-team.cc/
+#
+# 与其他站点不同，M-Team 走官方 REST API（JSON），而非解析 HTML 页面，
+# 具体接口调用逻辑见 sites/custom/mteam.py。
+#
+# 认证：推荐使用 API-Key（ApiKeyAuthProvider，请求头 x-api-key）。
+#   在网页站点「控制台 → 实验室 → 密钥(API Key)」中创建后填入。
+
 site_id: mteam
 display_name: M-Team
 base_url: https://api.m-team.cc
+# 网页访问域名：种子详情等展示给用户的链接用它拼接（API 域名打不开网页）
+web_base_url: https://tp.m-team.cc
 framework: api
 custom_class: movieclaw_tracker.sites.custom.mteam.MTeamSite
+
+# 走官方 API（非爬 HTML），可比默认(3s)适当放宽请求间隔
+min_request_interval: 1.0
+
+# ── 支持的授权类型 ────────────────────────────────────────────────
+# 用户配置本站点时可选的授权方式。M-Team 走官方 API，仅支持 API-Key。
+auth:
+  supported: [apikey]
+
+# ── 分类映射 ──────────────────────────────────────────────────────
+# 站点分类 ID → 应用级 TorrentCategory。
+# 搜索时用于把一级分类展开成站点分类过滤条件；
+# 解析结果时用于把 API 返回的 category ID 反向归类。
+categories:
+  movie:       [401, 419, 420, 421, 439]                 # SD / HD / DVD / BluRay / Remux
+  tv:          [403, 402, 435, 438, 407]                  # 剧集 SD/HD/DVD/BD + 体育
+  documentary: [404]                                      # 纪录教育
+  anime:       [405, 412, 413]                            # 动画 + H-动画 + H-漫画
+  music:       [406, 408, 434]                            # MV + AAC/ALAC + 无损
+  game:        [423, 411]                                 # PC 游戏 + H-Game
+  other:       [422, 427, 409]                            # 软件 + 电子书 + 其他
+  av:          [410, 429, 424, 430, 426, 437, 431, 432, 436, 425, 433]  # 各类成人内容

@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any
 
 
 class AppException(Exception):
@@ -8,7 +8,7 @@ class AppException(Exception):
         status_code: int,
         code: str,
         message: str,
-        details: Optional[list[dict[str, Any]]] = None,
+        details: list[dict[str, Any]] | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
@@ -21,7 +21,7 @@ class BadRequestException(AppException):
     def __init__(
         self,
         message: str = "bad request",
-        details: Optional[list[dict[str, Any]]] = None,
+        details: list[dict[str, Any]] | None = None,
     ) -> None:
         super().__init__(
             status_code=400,
@@ -35,7 +35,7 @@ class UnauthorizedException(AppException):
     def __init__(
         self,
         message: str = "unauthorized",
-        details: Optional[list[dict[str, Any]]] = None,
+        details: list[dict[str, Any]] | None = None,
     ) -> None:
         super().__init__(
             status_code=401,
@@ -49,7 +49,7 @@ class ForbiddenException(AppException):
     def __init__(
         self,
         message: str = "forbidden",
-        details: Optional[list[dict[str, Any]]] = None,
+        details: list[dict[str, Any]] | None = None,
     ) -> None:
         super().__init__(
             status_code=403,
@@ -63,7 +63,7 @@ class NotFoundException(AppException):
     def __init__(
         self,
         message: str = "resource not found",
-        details: Optional[list[dict[str, Any]]] = None,
+        details: list[dict[str, Any]] | None = None,
     ) -> None:
         super().__init__(
             status_code=404,
@@ -73,11 +73,27 @@ class NotFoundException(AppException):
         )
 
 
+class UpstreamServiceException(AppException):
+    """上游数据服务（如 TMDB）不可用、未配置或请求失败。"""
+
+    def __init__(
+        self,
+        message: str = "upstream service error",
+        details: list[dict[str, Any]] | None = None,
+    ) -> None:
+        super().__init__(
+            status_code=502,
+            code="UPSTREAM_ERROR",
+            message=message,
+            details=details,
+        )
+
+
 class ConflictException(AppException):
     def __init__(
         self,
         message: str = "conflict",
-        details: Optional[list[dict[str, Any]]] = None,
+        details: list[dict[str, Any]] | None = None,
     ) -> None:
         super().__init__(
             status_code=409,

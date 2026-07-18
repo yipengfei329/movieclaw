@@ -1,0 +1,13 @@
+# 通用 OpenAI 兼容端点（自建 vLLM / Ollama / DeepSeek 官方等）。
+# base_url 必须由用户在实例配置里提供；模型目录靠 extra_models 补录。
+# thinking_field 默认按 reasoning_content 探测——该字段已是事实标准，
+# 端点不返回时无副作用。
+id: openai_compat
+display_name: OpenAI 兼容端点
+protocol: openai_chat
+base_url: null
+requires_base_url: true
+compat:
+  thinking_field: reasoning_content
+  supports_stream_usage: true
+models: []
