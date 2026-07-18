@@ -26,9 +26,9 @@ ml/
 ├── data/
 │   ├── sources/          # 外部来源数据；external_pool.jsonl.gz（17 站 ~7.3 万条
 │   │                     #   精简池，由 extract_source.py 从外部 517MB 库抽取，
-│   │                     #   原库已弃，此文件例外入 git）
-│   ├── raw/              # 抽样生成的待标注队列（不提交，可随时重新生成）
-│   └── labeled/          # 标注数据（★ 长期资产，必须提交 git）
+│   │                     #   原库已弃）
+│   ├── raw/              # 抽样生成的待标注队列（可随时重新生成）
+│   └── labeled/          # 标注数据（★ 长期资产，仅存本地，注意备份）
 ├── artifacts/            # 训练与导出产物（不提交，正式版本发 GitHub Release）
 ├── tests/                # span/BIO 转换的单元测试
 └── requirements.txt      # 训练环境依赖（数据管线零依赖）
@@ -64,8 +64,8 @@ ml/
 - **review 样本自动隔离**：带 `review` 标记（模型抽取子串定位失败，span 可能
   不完整）的记录，训练/评估时经 `load_split(clean_only=True)` 自动排除——
   入训会教模型漏抽、入评会误判假阳性。人工修正后删除/清空 `review` 即自动回流；
-- **留存**：labeled/*.jsonl 进 git，每完成一个标注里程碑就 commit 一次
-  （这是唯一不可再生的资产；raw/ 和模型产物都可重建）。
+- **留存**：data/ 整体取自私有站点，属敏感数据，不进 git（见 ml/.gitignore）。
+  labeled/*.jsonl 是唯一不可再生的资产，请自行离线备份；raw/ 和模型产物都可重建。
 
 ## 数据格式
 

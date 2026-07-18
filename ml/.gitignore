@@ -1,8 +1,6 @@
-# 原始抽样、外部来源数据、训练产物不入库；标注数据（data/labeled/）是长期资产，必须提交。
-# 例外：external_pool.jsonl.gz 是 517MB 外部库删除后的唯一替代资产（几 MB），入库保存。
-data/raw/
-data/sources/*
-!data/sources/external_pool.jsonl.gz
+# 训练数据与产物一律不入库：标注/来源数据取自私有 PT 站点，属敏感数据，
+# 只保留在本地（长期资产，注意自行备份）；模型产物体积过大。
+data/
 artifacts/
 .venv/
 *.lock

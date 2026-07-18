@@ -19,9 +19,14 @@ htmlcov/
 # Node / pnpm / Next.js
 node_modules/
 .next/
+.next-preview*/
 out/
 .pnpm-store/
 *.tsbuildinfo
+
+# WXT 浏览器插件构建产物
+apps/extension/.wxt/
+apps/extension/.output/
 apps/web/.env.local
 apps/web/.env.production.local
 apps/web/.env.development.local
@@ -31,4 +36,8 @@ apps/web/.env.development.local
 .vscode/
 .DS_Store
 .claude/settings.local.json
+/.claude/launch.json
 .codex/
+
+# 运行期数据：SQLite 数据库文件及其 WAL/SHM 附属文件（部署时挂载为 volume）
+/data/
