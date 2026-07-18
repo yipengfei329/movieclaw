@@ -122,12 +122,13 @@ def main() -> None:
             made += 1
         print(f"{mode}: 合成 {made} 条")
 
-    # collection 过采样 ×2（施加 decoration 变换避免完全重复）
-    for i in range(2):
+    # collection 过采样 ×5（真实 collection 太稀有，分类头需要更强监督；
+    # 施加 decoration 变换避免完全重复）
+    for i in range(5):
         for record in collections:
             rows.append({**make_decoration(record, rng), "id": f"aug-collection{i}:{record['id']}",
                          "annotator": "synthetic:collection-oversample"})
-    print(f"collection 过采样: {len(collections) * 2} 条")
+    print(f"collection 过采样: {len(collections) * 5} 条")
 
     with open(args.out, "w", encoding="utf-8") as f:
         for row in rows:
