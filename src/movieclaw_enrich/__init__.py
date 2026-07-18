@@ -46,7 +46,9 @@ logger = logging.getLogger("movieclaw_enrich")
 #     新增 collection——推理端暂映射 None 待产品化）：动漫专项 + 一致性重标
 # v8: 片名 span 分隔符结构精修（structure.py，金标 0.1% 跨界统计背书）+
 #     新增 title_candidates 候选别名字段（TMDB 匹配的降级查询词/漏抽保险层）
-ENRICH_VERSION = 8
+# v9: 模型升级（规范 v11：日韩原名归外文轴 + 剧场版变体注入合成）：合集名
+#     完整抽取治愈，回归 9/15→11/15
+ENRICH_VERSION = 9
 
 
 def _has_value(value: object) -> bool:

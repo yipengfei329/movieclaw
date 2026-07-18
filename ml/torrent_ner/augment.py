@@ -74,6 +74,14 @@ def make_insertion(record: dict, rng: random.Random, mode: str) -> dict | None:
     elif mode == "version_suffix":
         ins = rng.choice(VERSION_WORDS)
         extra = None
+    elif mode == "variant_inject":
+        # 在干净别名后注入"含类型标记的变体别名"且**不打任何标签**——教模型
+        # "有干净兄弟别名时跳过标记变体"（v10 择干净规则的合成监督）
+        title_text = record["subtitle"][anchor["start"]:anchor["end"]]
+        marker = rng.choice(["剧场版：", " 剧场版 ", " 总集篇 ", " 特别篇 "])
+        suffix = rng.choice(["最终章", "完结篇", ""])
+        ins = f" / {title_text}{marker}{suffix}".rstrip()
+        extra = None
     else:  # chapter
         expr = f"第{rng.choice(CN_NUMS)}章"
         ins = " " + expr
@@ -98,7 +106,8 @@ def main() -> None:
     base = [r for r in records if r.get("subtitle", "").strip()]
     collections = [r for r in records if r.get("media_type") == "collection"]
 
-    plan = [("decoration", 300), ("trailing_stop", 250), ("version_suffix", 250), ("chapter", 200)]
+    plan = [("decoration", 300), ("trailing_stop", 250), ("version_suffix", 250), ("chapter", 200),
+            ("variant_inject", 250)]
     rows = []
     for mode, quota in plan:
         made = 0
