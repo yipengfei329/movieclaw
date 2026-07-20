@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 import httpx
+import pytest
 import pytest_asyncio
 from sqlmodel import select
 
@@ -29,6 +30,7 @@ from movieclaw_db.models import (
     WantedStatus,
 )
 from movieclaw_db.models.base import utcnow
+from movieclaw_db.repositories.library_repo import LibraryRepository
 from movieclaw_enrich.models import TorrentAttrs
 from movieclaw_matcher import RuleVerdict, TorrentCandidate
 from movieclaw_media.models import MediaKind
@@ -169,9 +171,7 @@ async def test_watermark_skips_history_then_follows_new_torrents(db) -> None:
         wanted = await _wanted_map(session, sub.id)
         assert all(w.status == WantedStatus.WANTED for w in wanted.values())
 
-        await _insert_torrent(
-            session, "new1", "Test Show S01 2160p WEB-DL 新种子", _S1_PACK_ATTRS
-        )
+        await _insert_torrent(session, "new1", "Test Show S01 2160p WEB-DL 新种子", _S1_PACK_ATTRS)
 
     await process_new_torrents()  # 二跑：跟随到新种子并投递
     async with db.session() as session:
@@ -190,6 +190,44 @@ async def test_watermark_skips_history_then_follows_new_torrents(db) -> None:
     async with db.session() as session:
         grabbed = [a for a in await _activities(session, sub.id) if a.type == "grabbed"]
         assert len(grabbed) == 1
+
+
+async def test_dispatch_derives_save_path_from_library(db) -> None:
+    """投递 save_path 由订阅目标库主根推导（{主根}/{标题} ({年份})），
+    GRABBED 活动的 message 与 payload 都带完整路径——dry-run 同样可见（L1.3）。"""
+    async with db.session() as session:
+        lib = await LibraryRepository(session).create(
+            name="剧集库", kind="tv", root_paths=["/media/tv"]
+        )
+        sub = await _service(session).create(
+            MediaKind.TV, 200, selected_seasons=[1], library_id=lib.id
+        )
+
+    await process_new_torrents()  # 首跑：只初始化水位
+    async with db.session() as session:
+        await _insert_torrent(session, "libpack", "Test Show S01 2160p WEB-DL", _S1_PACK_ATTRS)
+
+    await process_new_torrents()
+    async with db.session() as session:
+        grabbed = [a for a in await _activities(session, sub.id) if a.type == "grabbed"]
+        assert len(grabbed) == 1
+        assert "下载完成后将入库到「剧集库」：/media/tv/测试剧集 (2024)" in grabbed[0].message
+        assert grabbed[0].payload["library_id"] == lib.id
+        assert grabbed[0].payload["save_path"] == "/media/tv/测试剧集 (2024)"
+
+
+async def test_subscription_rejects_kind_mismatched_library(db) -> None:
+    """电影库不能作为剧集订阅的入库目标（类型校验，中文可读报错）。"""
+    from movieclaw_api.exceptions import BadRequestException
+
+    async with db.session() as session:
+        movie_lib = await LibraryRepository(session).create(
+            name="电影库", kind="movie", root_paths=["/media/movies"]
+        )
+        with pytest.raises(BadRequestException, match="类型不匹配"):
+            await _service(session).create(
+                MediaKind.TV, 200, selected_seasons=[1], library_id=movie_lib.id
+            )
 
 
 async def test_rule_rejection_logged_once_with_reason(db) -> None:
@@ -247,19 +285,32 @@ async def test_dispatch_claim_race_second_caller_loses(db) -> None:
         wanted = await _wanted_map(session, sub.id)
         item = (await _service(session).detail(sub.id))[1]
         candidate = TorrentCandidate(
-            site_id="testsite", torrent_id="x", title="Test Show S01 2160p",
-            subtitle="", attrs=TorrentAttrs.model_validate(_S1_PACK_ATTRS),
+            site_id="testsite",
+            torrent_id="x",
+            title="Test Show S01 2160p",
+            subtitle="",
+            attrs=TorrentAttrs.model_validate(_S1_PACK_ATTRS),
         )
         verdict = RuleVerdict(accepted=True, score=1)
         targets = [wanted[(1, 1)], wanted[(1, 2)]]
 
         first = await dispatch(
-            session, subscription=sub, item=item, wanted_rows=targets,
-            candidate=candidate, verdict=verdict, source="测试",
+            session,
+            subscription=sub,
+            item=item,
+            wanted_rows=targets,
+            candidate=candidate,
+            verdict=verdict,
+            source="测试",
         )
         second = await dispatch(
-            session, subscription=sub, item=item, wanted_rows=targets,
-            candidate=candidate, verdict=verdict, source="测试",
+            session,
+            subscription=sub,
+            item=item,
+            wanted_rows=targets,
+            candidate=candidate,
+            verdict=verdict,
+            source="测试",
         )
     assert first is True and second is False
 
@@ -345,8 +396,12 @@ def _fake_search(monkeypatch, *, sites_ok: int, hits: list, calls: list | None =
                 SiteSearchStatus(site_id="s0", site_name="站0", count=0, error="站点访问失败")
             ]
         return SearchResponse(
-            keyword=keyword, label=label, categories=[], total=len(hits),
-            items=hits, sites=statuses,
+            keyword=keyword,
+            label=label,
+            categories=[],
+            total=len(hits),
+            items=hits,
+            sites=statuses,
         )
 
     monkeypatch.setattr(site_search, "search_all_sites", fake)
@@ -392,7 +447,9 @@ async def test_search_no_result_backs_off_with_attempt(db, monkeypatch) -> None:
 
     # 剧集订阅的搜索必须带分类收窄（剧集/纪录片/动漫），不带 music/game/av 噪音
     assert calls and calls[0]["categories"] == [
-        TorrentCategory.TV, TorrentCategory.DOCUMENTARY, TorrentCategory.ANIME
+        TorrentCategory.TV,
+        TorrentCategory.DOCUMENTARY,
+        TorrentCategory.ANIME,
     ]
 
 
@@ -423,9 +480,7 @@ async def test_search_hit_persists_and_dispatches(db, monkeypatch) -> None:
         assert wanted[(1, 2)].status == WantedStatus.GRABBED
 
         persisted = (
-            await session.execute(
-                select(SiteTorrent).where(SiteTorrent.torrent_id == "found1")
-            )
+            await session.execute(select(SiteTorrent).where(SiteTorrent.torrent_id == "found1"))
         ).scalar_one()
         assert persisted.source == TorrentSource.SEARCH  # 副产品沉淀进公共缓存
 

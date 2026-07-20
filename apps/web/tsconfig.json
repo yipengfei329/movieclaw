@@ -32,29 +32,8 @@
   "include": [
     "**/*.ts",
     "**/*.tsx",
-    ".next-preview-agent-sessions/types/**/*.ts",
-    ".next-preview-avatar/types/**/*.ts",
-    ".next-preview-collapse/types/**/*.ts",
-    ".next-preview-detail/types/**/*.ts",
-    ".next-preview-discover/types/**/*.ts",
-    ".next-preview-download-submit/types/**/*.ts",
-    ".next-preview-downloaders/types/**/*.ts",
-    ".next-preview-facets/types/**/*.ts",
-    ".next-preview-llm/types/**/*.ts",
-    ".next-preview-markdown/types/**/*.ts",
-    ".next-preview-mediasearch/types/**/*.ts",
-    ".next-preview-posters/types/**/*.ts",
-    ".next-preview-scrim/types/**/*.ts",
-    ".next-preview-search-entry/types/**/*.ts",
-    ".next-preview-searchprefs/types/**/*.ts",
-    ".next-preview-sidebar-glass/types/**/*.ts",
-    ".next-preview-sidebar/types/**/*.ts",
-    ".next-preview-sse/types/**/*.ts",
-    ".next-preview-subs/types/**/*.ts",
-    ".next-preview/types/**/*.ts",
     ".next/types/**/*.ts",
-    "next-env.d.ts",
-    ".next-preview-syslogs/types/**/*.ts"
+    "next-env.d.ts"
   ],
   "exclude": [
     "node_modules"

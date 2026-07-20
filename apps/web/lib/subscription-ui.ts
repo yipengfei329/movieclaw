@@ -13,15 +13,23 @@ export const subscriptionStatusMeta: Record<
   paused: { label: "已暂停", color: "#f5c451" },
 };
 
-/** 进度说明：回答「还缺多少」——订阅信息里最高频的一眼答案。 */
+/** 进度说明：回答「还缺多少 / 入库了多少」——订阅信息里最高频的一眼答案。 */
 export function subscriptionProgressNote(sub: Subscription): string {
-  const { wanted, grabbed, downloaded, total } = sub.progress;
+  const { wanted, grabbed, downloaded, imported, total } = sub.progress;
   if (sub.status === "paused") return "暂停追踪";
+  const inPipeline = grabbed + downloaded;
   if (wanted === 0) {
+    if (sub.media.kind === "movie") {
+      return imported > 0 ? "已入库" : inPipeline > 0 ? "下载安排中" : "已收齐";
+    }
+    if (inPipeline > 0) return `${inPipeline} 集下载中 · 已入库 ${imported}`;
     if (sub.status === "active") return "等待新集播出";
-    return sub.media.kind === "movie" ? "已提交下载" : `全部 ${total} 集已安排`;
+    return imported > 0 ? `全部 ${total} 集已入库` : `全部 ${total} 集已安排`;
   }
-  const got = grabbed + downloaded;
   if (sub.media.kind === "movie") return "正在寻找资源";
-  return got > 0 ? `缺 ${wanted} 集 · 已入库 ${got}` : `缺 ${wanted} 集`;
+  const detail = [
+    inPipeline > 0 ? `${inPipeline} 集下载中` : null,
+    imported > 0 ? `已入库 ${imported}` : null,
+  ].filter(Boolean);
+  return detail.length > 0 ? `缺 ${wanted} 集 · ${detail.join(" · ")}` : `缺 ${wanted} 集`;
 }

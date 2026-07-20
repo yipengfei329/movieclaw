@@ -14,6 +14,7 @@ import {
 } from "@/components/icons";
 import { ImageLightbox, type LightboxAction } from "@/components/image-lightbox";
 import { MediaRow } from "@/components/media-row";
+import { PosterImage } from "@/components/poster-image";
 import { SubscribeDialog, type SubscribeTarget } from "@/components/subscribe-dialog";
 import {
   fetchDoubanMediaDetail,
@@ -136,21 +137,19 @@ export function MediaDetailView({
       {/* —— 1. Hero 大剧照 —— */}
       <div className="px-6 pt-5">
         <div className="relative h-[42vh] min-h-[280px] overflow-hidden rounded-2xl shadow-[0_24px_70px_-18px_rgba(0,0,0,0.62)] ring-1 ring-white/10">
-          {item.backdropUrl ? (
-            <img
-              src={item.backdropUrl}
-              alt={`${item.title} 剧照`}
-              className="absolute inset-0 size-full object-cover object-top"
-            />
-          ) : (
-            // 无横幅剧照时的兜底：海报放大 + 重度模糊，产出该片专属的氛围底色
-            <img
-              src={item.posterUrl}
-              alt=""
-              aria-hidden="true"
-              className="absolute inset-0 size-full scale-125 object-cover blur-3xl brightness-[0.72] saturate-[1.25]"
-            />
-          )}
+          <PosterImage
+            src={item.backdropUrl}
+            alt={`${item.title} 剧照`}
+            className="absolute inset-0 size-full object-cover object-top"
+            // 无横幅剧照（或加载失败）时的兜底：海报放大 + 重度模糊，产出该片专属的氛围底色
+            fallback={
+              <PosterImage
+                src={item.posterUrl}
+                alt=""
+                className="absolute inset-0 size-full scale-125 object-cover blur-3xl brightness-[0.72] saturate-[1.25]"
+              />
+            }
+          />
           {/* 双层渐变：左侧压暗、底部渐隐融入页面，保证叠加文字可读 */}
           <div className="absolute inset-0 bg-gradient-to-r from-[rgba(7,9,14,0.72)] via-[rgba(7,9,14,0.25)] to-transparent" />
           <div className="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-[rgba(7,9,14,0.88)] via-[rgba(7,9,14,0.35)] to-transparent" />
@@ -169,7 +168,7 @@ export function MediaDetailView({
       {/* —— 2. 头部信息区：海报上浮压住 Hero 底边 —— */}
       <div className="relative z-10 -mt-44 flex items-end gap-7 px-12">
         <div className="w-[186px] shrink-0 overflow-hidden rounded-xl bg-[#141824] shadow-[0_26px_60px_rgba(0,0,0,0.6)] ring-1 ring-white/15">
-          <img
+          <PosterImage
             src={item.posterUrl}
             alt={`${item.title} 海报`}
             className="aspect-[2/3] w-full object-cover"
@@ -462,10 +461,9 @@ function PhotoWall({
                 active.id === "backdrops" ? "aspect-video h-[148px]" : "aspect-[2/3] h-[148px]"
               }`}
             >
-              <img
+              <PosterImage
                 src={img.previewUrl}
                 alt={`${title} ${active.label}`}
-                loading="lazy"
                 className="size-full object-cover transition-transform duration-500 ease-out hover:scale-[1.05]"
               />
             </button>

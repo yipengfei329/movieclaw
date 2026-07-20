@@ -27,6 +27,8 @@ from movieclaw_downloader.models import (
     DownloaderType,
     DownloadRequest,
     SubmitResult,
+    TorrentFile,
+    TorrentStatus,
 )
 
 __all__ = [
@@ -41,6 +43,8 @@ __all__ = [
     "DownloaderSubmitError",
     "DownloaderType",
     "SubmitResult",
+    "TorrentFile",
+    "TorrentStatus",
     "TorrentParseError",
     "create_downloader",
 ]

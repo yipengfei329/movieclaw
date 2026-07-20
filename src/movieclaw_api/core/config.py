@@ -45,6 +45,31 @@ class Settings(BaseSettings):
     media_dir: str = Field(default="./data/uploads", alias="MEDIA_DIR")
 
     # ------------------------------------------------------------------
+    # 媒体库首启种子根目录
+    # ------------------------------------------------------------------
+    # 库表为空的首次启动会种子"电影库/剧集库"两个默认库，根路径落在本目录的
+    # movies/ 与 tv/ 子目录（默认与 SQLite 同卷，Docker 部署开箱即可持久化）。
+    # NAS 部署建议直接改环境变量指到媒体盘，或启动后在「设置 → 媒体库」修改。
+    library_default_root: str = Field(default="./data/library", alias="LIBRARY_DEFAULT_ROOT")
+
+    # ------------------------------------------------------------------
+    # 下载目录路径映射（movieclaw 与下载器不同容器/机器时）
+    # ------------------------------------------------------------------
+    # 下载器上报的保存目录是**它自己视角**的路径；两边挂载点不一致时，入库
+    # 整理器在本进程找不到文件。格式："下载器路径=>本地路径"，多组用分号分隔，
+    # 如 "/downloads=>/vol1/downloads;/data=>/mnt/data"。按最长前缀匹配替换。
+    download_path_mapping: str = Field(default="", alias="DOWNLOAD_PATH_MAPPING")
+
+    # ------------------------------------------------------------------
+    # 入库后通知媒体服务器刷新（可选，媒体库 L4）
+    # ------------------------------------------------------------------
+    # 配置后，每次整理入库成功会通知 Emby/Jellyfin 刷新媒体库，新内容即刻
+    # 出现在播放器里。留空则不通知。token 是 Emby/Jellyfin 的 API 密钥。
+    media_server_url: str = Field(default="", alias="MEDIA_SERVER_URL")
+    media_server_type: str = Field(default="emby", alias="MEDIA_SERVER_TYPE")
+    media_server_token: str = Field(default="", alias="MEDIA_SERVER_TOKEN")
+
+    # ------------------------------------------------------------------
     # 远程图片磁盘缓存
     # ------------------------------------------------------------------
     # 发现页海报（TMDB）、豆瓣剧照、PT 站种子详情图等所有远程图片都经
@@ -73,15 +98,11 @@ class Settings(BaseSettings):
     # Agent 的 bash / read / write / edit 工具的工作目录与相对路径解析基准。
     # 独立成一个目录（而非整个项目根），把 Agent 的文件操作圈在可控范围内；
     # 与 data/ 同级便于 Docker 一并挂载持久化。
-    agent_workspace_dir: str = Field(
-        default="./data/agent-workspace", alias="AGENT_WORKSPACE_DIR"
-    )
+    agent_workspace_dir: str = Field(default="./data/agent-workspace", alias="AGENT_WORKSPACE_DIR")
     # Agent 会话转录目录：一个会话一个 JSONL 文件（append-only，事实源）。
     # SQLite 里的 agent_session 表只是可从这里整体重建的查询索引。
     # 与 data/ 下其它持久化目录一样随 Docker volume 一并备份。
-    agent_sessions_dir: str = Field(
-        default="./data/agent-sessions", alias="AGENT_SESSIONS_DIR"
-    )
+    agent_sessions_dir: str = Field(default="./data/agent-sessions", alias="AGENT_SESSIONS_DIR")
 
     # ------------------------------------------------------------------
     # 登录会话 Cookie
@@ -96,9 +117,7 @@ class Settings(BaseSettings):
     # 模拟投递开关（默认开）：匹配管线走完整状态机（认领→grabbed、活动照记），
     # 但不取种、不碰下载器，只打完整中文日志。用于安全观察订阅管线行为；
     # 确认无误后置 false 切换真实投递，代码路径不变。
-    subscription_dispatch_dry_run: bool = Field(
-        default=True, alias="SUBSCRIPTION_DISPATCH_DRY_RUN"
-    )
+    subscription_dispatch_dry_run: bool = Field(default=True, alias="SUBSCRIPTION_DISPATCH_DRY_RUN")
 
     # ------------------------------------------------------------------
     # TMDB 影视元数据（发现页数据源）

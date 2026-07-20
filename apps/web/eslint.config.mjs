@@ -13,7 +13,7 @@ const compat = new FlatCompat({
 const eslintConfig = [
   {
     // vendor/ 是从 liquidglass-oss 内联的第三方源码，按原样保留，不参与本项目 lint。
-    ignores: [".next/**", ".next-preview/**", "next-env.d.ts", "vendor/**"],
+    ignores: [".next/**", ".next-preview*/**", "next-env.d.ts", "vendor/**"],
   },
   ...compat.extends("next/core-web-vitals", "next/typescript"),
   {

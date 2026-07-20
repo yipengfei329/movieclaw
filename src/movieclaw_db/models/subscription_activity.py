@@ -23,6 +23,11 @@ class ActivityType(StrEnum):
     - MATCH_ACCEPTED / MATCH_REJECTED：候选判定（拒绝原因是可解释性的核心）
     - GRABBED / DISPATCH_FAILED：投递结果
     - WANTED_ADDED：元数据刷新发现新集，追加了工单
+
+    入库管线类（媒体库 L2 起记录）：
+    - DOWNLOADED：下载器确认文件全部落盘
+    - IMPORTED：整理入库完成（硬链到库目录 + 台账落账，payload 带路径）
+    - IMPORT_FAILED：整理失败（跨盘硬链/路径不可达/解析不出集号等，中文原因）
     """
 
     CREATED = "created"
@@ -37,6 +42,9 @@ class ActivityType(StrEnum):
     GRABBED = "grabbed"
     DISPATCH_FAILED = "dispatch_failed"
     WANTED_ADDED = "wanted_added"
+    DOWNLOADED = "downloaded"
+    IMPORTED = "imported"
+    IMPORT_FAILED = "import_failed"
 
 
 class SubscriptionActivity(TimestampMixin, table=True):

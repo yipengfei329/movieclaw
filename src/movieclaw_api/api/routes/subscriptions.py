@@ -24,6 +24,7 @@ from movieclaw_api.services.subscription import SubscriptionService
 from movieclaw_api.services.wanted_search import search_wanted
 from movieclaw_db.engine import get_session
 from movieclaw_media.library import ResolveStatus
+from movieclaw_media.models import MediaKind
 
 router = APIRouter(prefix="/subscriptions", tags=["subscriptions"])
 
@@ -62,9 +63,7 @@ async def prepare_subscription(
             return ok(
                 PrepareView(
                     status="ambiguous",
-                    candidates=[
-                        ResolveCandidateView.from_model(c) for c in resolution.candidates
-                    ],
+                    candidates=[ResolveCandidateView.from_model(c) for c in resolution.candidates],
                 ),
                 message="找到多个可能的条目，请确认是哪一部",
             )
@@ -78,12 +77,18 @@ async def prepare_subscription(
     item, seasons, existing = await service.prepare(
         payload.kind, tmdb_id, douban_id=payload.douban_id
     )
+    # 库存概览（媒体库 L3 联通）：季选择器每行显示"库里已有 x 集"
+    from movieclaw_db.repositories.library_file_repo import LibraryFileRepository
+
+    assert item.id is not None
+    owned = await LibraryFileRepository(session).owned_units(item.id)
     return ok(
         PrepareView(
             status="ready",
             media=MediaBrief.from_model(item),
-            seasons=[SeasonOverview.from_row(s) for s in seasons],
+            seasons=[SeasonOverview.from_row(s, owned_units=owned) for s in seasons],
             existing_subscription_id=existing.id if existing else None,
+            movie_owned=payload.kind == MediaKind.MOVIE and (0, 0) in owned,
         )
     )
 
@@ -107,6 +112,7 @@ async def create_subscription(
         selected_seasons=payload.selected_seasons,
         follow_future=payload.follow_future,
         rule_set_id=payload.rule_set_id,
+        library_id=payload.library_id,
         douban_id=payload.douban_id,
     )
     assert subscription.id is not None
@@ -178,6 +184,7 @@ async def update_subscription(
         selected_seasons=payload.selected_seasons,
         follow_future=payload.follow_future,
         rule_set_id=payload.rule_set_id,
+        library_id=payload.library_id,
     )
     sub, item, wanted = await service.detail(subscription_id)
     # diff 可能补了新的补旧工单，同样立即发车

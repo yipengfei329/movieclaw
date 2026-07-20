@@ -105,6 +105,12 @@ class DownloadSubmitPayload(BaseModel):
 
     site_id: str = Field(min_length=1, description="种子所属站点 ID（TorrentHit.site_id）")
     download_url: str = Field(min_length=1, description="种子下载入口（TorrentHit.download_url）")
+    # 入库目标（可选）：带 library_id 时保存目录改为由库推导（主根/标题 (年份)）。
+    # title/year 来自搜索结果的解析实体；无法确定条目身份时只带 library_id，
+    # 落到库主根目录。三者都缺省 = 维持原行为（下载器默认目录）。
+    library_id: int | None = Field(default=None, description="入库到哪个媒体库")
+    title: str | None = Field(default=None, description="条目标题（推导条目子目录用）")
+    year: int | None = Field(default=None, description="条目年份")
 
 
 class DownloadSubmitView(BaseModel):

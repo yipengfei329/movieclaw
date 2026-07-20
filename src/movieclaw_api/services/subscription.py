@@ -33,7 +33,12 @@ from movieclaw_db.models import (
     WantedStatus,
     utcnow,
 )
-from movieclaw_db.repositories import MediaItemRepository, SubscriptionRepository
+from movieclaw_db.models.library import Library
+from movieclaw_db.repositories import (
+    LibraryRepository,
+    MediaItemRepository,
+    SubscriptionRepository,
+)
 from movieclaw_media.models import MediaKind
 
 logger = logging.getLogger("movieclaw_api.subscription")
@@ -115,7 +120,11 @@ async def recompute_subscription_status(
     """派生状态重算（不变量④）：completed ⟺ 无未满足工单 且 E 不再生长。
 
     paused 是用户显式状态，不碰。状态翻转本身也是活动（透明化）。
-    注：P4 阶段"满足"= grabbed（已提交下载）；P5 接入下载完成确认后收紧。
+
+    "满足"的判定（媒体库 L2 收紧）：imported 是唯一硬满足；真实投递的
+    grabbed/downloaded 带 info_hash，说明入库管线还在进行 → 仍视为未满足；
+    模拟投递（dry-run）的 grabbed 没有 info_hash、不存在后续管线，维持
+    P4 语义视为满足——切真实投递后无需任何开关，判定自然收紧。
     模块级函数：订阅服务与投递/刷新管线共用，不依赖 TMDB client。
     """
     if subscription.status == SubscriptionStatus.PAUSED:
@@ -123,16 +132,21 @@ async def recompute_subscription_status(
     assert subscription.id is not None
     repo = SubscriptionRepository(session)
     wanted = await repo.list_wanted(subscription.id)
-    has_open = any(w.status == WantedStatus.WANTED for w in wanted)
+
+    def _is_open(w: WantedItem) -> bool:
+        if w.status == WantedStatus.WANTED:
+            return True
+        in_pipeline = w.status in (WantedStatus.GRABBED, WantedStatus.DOWNLOADED)
+        return in_pipeline and w.info_hash is not None
+
+    has_open = any(_is_open(w) for w in wanted)
     growing = (
         subscription.kind == MediaKind.TV.value
         and subscription.follow_future
         and (item.status or "") not in _ENDED_STATUSES
     )
     new_status = (
-        SubscriptionStatus.COMPLETED
-        if not has_open and not growing
-        else SubscriptionStatus.ACTIVE
+        SubscriptionStatus.COMPLETED if not has_open and not growing else SubscriptionStatus.ACTIVE
     )
     if subscription.status == new_status:
         return
@@ -145,9 +159,7 @@ async def recompute_subscription_status(
         message = "出现新的缺口，重新进入追踪"
         activity_type = ActivityType.REOPENED
     await repo.add_activity(
-        SubscriptionActivity(
-            subscription_id=subscription.id, type=activity_type, message=message
-        )
+        SubscriptionActivity(subscription_id=subscription.id, type=activity_type, message=message)
     )
 
 
@@ -194,6 +206,7 @@ class SubscriptionService:
         selected_seasons: list[int] | None = None,
         follow_future: bool = False,
         rule_set_id: int | None = None,
+        library_id: int | None = None,
         douban_id: str | None = None,
     ) -> Subscription:
         """创建订阅并生成初始工单。同一条目已有订阅时幂等返回已有（不改参数）。"""
@@ -212,6 +225,8 @@ class SubscriptionService:
         else:
             await self._rule_sets.get(rule_set_id)  # 不存在则抛 404
         assert rule_set_id is not None
+        if library_id is not None:
+            await self._validate_library(kind.value, library_id)
 
         subscription = await self._repo.save(
             Subscription(
@@ -220,22 +235,31 @@ class SubscriptionService:
                 selected_seasons=selected,
                 follow_future=follow_future,
                 rule_set_id=rule_set_id,
+                library_id=library_id,
                 status=SubscriptionStatus.ACTIVE,
             )
         )
         assert subscription.id is not None
 
         units = expected_units(kind, seasons, selected, follow_future)
+        # 库存联通（媒体库 L3）：库里已有的单元不生成工单——E−H 用真实的 H
+        owned = await self._owned_units(item.id)
+        skipped_owned = [u for u in units if (u.season_number, u.episode_number) in owned]
+        units = [u for u in units if (u.season_number, u.episode_number) not in owned]
         rows = [self._to_wanted(subscription, unit) for unit in units]
         await self._repo.add_wanted(rows)
+        created_message = self._created_message(item, kind, selected, follow_future, rows)
+        if skipped_owned:
+            created_message += f"；库里已有 {len(skipped_owned)} 个单元，无需重复下载"
         await self._log(
             subscription,
             ActivityType.CREATED,
-            self._created_message(item, kind, selected, follow_future, rows),
+            created_message,
             payload={
                 "selected_seasons": selected,
                 "follow_future": follow_future,
                 "wanted_total": len(rows),
+                "owned_skipped": len(skipped_owned),
             },
         )
         await self._recompute_status(subscription, item)
@@ -260,8 +284,9 @@ class SubscriptionService:
         selected_seasons: list[int] | None = None,
         follow_future: bool | None = None,
         rule_set_id: int | None = None,
+        library_id: int | None = None,
     ) -> Subscription:
-        """修改 E 的定义（季选择/追新/规则组），diff 重算工单。
+        """修改 E 的定义（季选择/追新/规则组/入库目标库），diff 重算工单。
 
         diff 规则（不变量③）：
         - 新入域的单元 → 补工单（调度语义按当下重新判定）；
@@ -275,6 +300,9 @@ class SubscriptionService:
         if rule_set_id is not None and rule_set_id != subscription.rule_set_id:
             await self._rule_sets.get(rule_set_id)
             subscription.rule_set_id = rule_set_id
+        if library_id is not None and library_id != subscription.library_id:
+            await self._validate_library(subscription.kind, library_id)
+            subscription.library_id = library_id
 
         kind = MediaKind(subscription.kind)
         seasons = await self._media_repo.list_seasons(subscription.media_item_id)
@@ -293,16 +321,19 @@ class SubscriptionService:
         selected_set = set(subscription.selected_seasons)
 
         expected_keys = {(u.season_number, u.episode_number) for u in expected}
+        owned = await self._owned_units(subscription.media_item_id)
         to_add = [
             self._to_wanted(subscription, unit)
             for unit in expected
             if (unit.season_number, unit.episode_number) not in existing_keys
+            and (unit.season_number, unit.episode_number) not in owned
         ]
         # 出域判定不能只看当前 E 快照：经追新进入的单元播出之后就不在"评估时刻
         # 的未来集"里了，但只要追新开关还开着，它们仍在域内。没有来源字段时用
         # 播出日期区分血统：air_date 晚于订阅创建（或未定档）的单元视作追新进入，
         # 开关开着即受保护；早于创建的只可能来自勾选季，季被取消即出域。
         created_date = subscription.created_at.date()
+
         def _protected_by_follow(w: WantedItem) -> bool:
             return (
                 subscription.follow_future
@@ -462,12 +493,8 @@ class SubscriptionService:
         if kind is MediaKind.MOVIE:
             return f"创建订阅《{item.title}》：已加入搜索队列，等待搜索任务寻找资源"
         now = utcnow()
-        immediate = sum(
-            1 for w in rows if w.next_search_at is not None and w.next_search_at <= now
-        )
-        future = sum(
-            1 for w in rows if w.next_search_at is not None and w.next_search_at > now
-        )
+        immediate = sum(1 for w in rows if w.next_search_at is not None and w.next_search_at <= now)
+        future = sum(1 for w in rows if w.next_search_at is not None and w.next_search_at > now)
         undated = sum(1 for w in rows if w.next_search_at is None)
         parts = []
         if immediate:
@@ -492,6 +519,22 @@ class SubscriptionService:
     # ------------------------------------------------------------------
     # 内部
     # ------------------------------------------------------------------
+
+    async def _owned_units(self, media_item_id: int) -> set[tuple[int, int]]:
+        """库存 H：该条目在媒体库里已拥有的期望单元（媒体库 L3 联通）。"""
+        from movieclaw_db.repositories.library_file_repo import LibraryFileRepository
+
+        return await LibraryFileRepository(self._session).owned_units(media_item_id)
+
+    async def _validate_library(self, kind: str, library_id: int) -> Library:
+        """校验目标库存在且类型匹配（电影订阅只能入电影库，剧集同理）。"""
+        row = await LibraryRepository(self._session).get(library_id)
+        if row is None:
+            raise BadRequestException(f"媒体库不存在：id={library_id}")
+        if row.kind != kind:
+            kind_text = "电影" if row.kind == MediaKind.MOVIE.value else "剧集"
+            raise BadRequestException(f"媒体库「{row.name}」是{kind_text}库，与该订阅的类型不匹配")
+        return row
 
     @staticmethod
     def _validate_selection(

@@ -124,6 +124,11 @@ export interface DownloadSubmitPayload {
   site_id: string;
   /** 种子下载入口（TorrentHit.download_url） */
   download_url: string;
+  /** 入库目标库（可选）：带上后保存目录由库推导（主根/标题 (年份)） */
+  library_id?: number | null;
+  /** 条目标题（推导条目子目录用；身份未确认时不要带） */
+  title?: string | null;
+  year?: number | null;
 }
 
 /** 手动提交下载的结果（见 schemas.downloader.DownloadSubmitView）。 */

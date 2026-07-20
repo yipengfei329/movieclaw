@@ -88,16 +88,19 @@ class MediaBrief(BaseModel):
 
 
 class SeasonOverview(BaseModel):
-    """弹层季选择器的一行：季号 + 播出进度。"""
+    """弹层季选择器的一行：季号 + 播出进度 + 库存进度。"""
 
     season_number: int
     name: str
     air_date: date | None
     episode_count: int | None
     aired_count: int = Field(description="已播集数（air_date<=今天）")
+    owned_count: int = Field(default=0, description="媒体库已有的集数（库存 H）")
 
     @classmethod
-    def from_row(cls, season: MediaSeason) -> SeasonOverview:
+    def from_row(
+        cls, season: MediaSeason, *, owned_units: set[tuple[int, int]] | None = None
+    ) -> SeasonOverview:
         today = utcnow().date()
         aired = 0
         for episode in season.episodes:
@@ -107,12 +110,16 @@ class SeasonOverview(BaseModel):
                     aired += 1
             except ValueError:
                 continue
+        owned = 0
+        if owned_units:
+            owned = sum(1 for s, _e in owned_units if s == season.season_number)
         return cls(
             season_number=season.season_number,
             name=season.name,
             air_date=season.air_date,
             episode_count=season.episode_count,
             aired_count=aired,
+            owned_count=owned,
         )
 
 
@@ -152,6 +159,9 @@ class PrepareView(BaseModel):
     existing_subscription_id: int | None = Field(
         default=None, description="该条目已有订阅时给出，前端展示「已订阅」态"
     )
+    movie_owned: bool = Field(
+        default=False, description="电影：媒体库里已有本片（弹层提示，不拦订阅）"
+    )
     candidates: list[ResolveCandidateView] = Field(default_factory=list)
 
 
@@ -166,6 +176,7 @@ class SubscriptionCreatePayload(BaseModel):
     selected_seasons: list[int] = Field(default_factory=list)
     follow_future: bool = False
     rule_set_id: int | None = Field(default=None, description="缺省用默认规则组")
+    library_id: int | None = Field(default=None, description="入库目标库；缺省用该类型默认库")
     douban_id: str | None = Field(default=None, description="豆瓣入口时带上，留存来源身份")
 
 
@@ -173,6 +184,7 @@ class SubscriptionUpdatePayload(BaseModel):
     selected_seasons: list[int] | None = None
     follow_future: bool | None = None
     rule_set_id: int | None = None
+    library_id: int | None = Field(default=None, description="换入库目标库；缺省不变")
 
 
 class SubscriptionPausePayload(BaseModel):
@@ -180,12 +192,13 @@ class SubscriptionPausePayload(BaseModel):
 
 
 class ProgressView(BaseModel):
-    """列表页进度：total = 工单总数，wanted 子集是缺口。"""
+    """列表页进度：total = 工单总数，wanted 子集是缺口，imported 是已入库终态。"""
 
     total: int
     wanted: int
     grabbed: int
     downloaded: int
+    imported: int
 
 
 class SubscriptionView(BaseModel):
@@ -195,6 +208,7 @@ class SubscriptionView(BaseModel):
     selected_seasons: list[int]
     follow_future: bool
     rule_set_id: int
+    library_id: int | None = Field(description="入库目标库；null=该类型默认库")
     progress: ProgressView
     created_at: datetime
     updated_at: datetime
@@ -210,6 +224,7 @@ class SubscriptionView(BaseModel):
         wanted = counts.get("wanted", 0)
         grabbed = counts.get("grabbed", 0)
         downloaded = counts.get("downloaded", 0)
+        imported = counts.get("imported", 0)
         return cls(
             id=sub.id,  # type: ignore[arg-type]
             media=MediaBrief.from_model(item),
@@ -217,11 +232,13 @@ class SubscriptionView(BaseModel):
             selected_seasons=list(sub.selected_seasons),
             follow_future=sub.follow_future,
             rule_set_id=sub.rule_set_id,
+            library_id=sub.library_id,
             progress=ProgressView(
-                total=wanted + grabbed + downloaded,
+                total=wanted + grabbed + downloaded + imported,
                 wanted=wanted,
                 grabbed=grabbed,
                 downloaded=downloaded,
+                imported=imported,
             ),
             created_at=sub.created_at,
             updated_at=sub.updated_at,
@@ -239,8 +256,12 @@ class WantedView(BaseModel):
     search_attempts: int
     last_search_at: datetime | None
     grabbed_at: datetime | None
+    downloaded_at: datetime | None
+    imported_at: datetime | None
 
-    @field_serializer("next_search_at", "last_search_at", "grabbed_at")
+    @field_serializer(
+        "next_search_at", "last_search_at", "grabbed_at", "downloaded_at", "imported_at"
+    )
     def _serialize_utc(self, value: datetime | None) -> str | None:
         return _iso_utc(value)
 
@@ -257,6 +278,8 @@ class WantedView(BaseModel):
             search_attempts=w.search_attempts,
             last_search_at=w.last_search_at,
             grabbed_at=w.grabbed_at,
+            downloaded_at=w.downloaded_at,
+            imported_at=w.imported_at,
         )
 
 

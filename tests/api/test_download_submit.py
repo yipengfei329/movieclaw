@@ -4,6 +4,7 @@
 无默认可用下载器、站点不可用、站点取种失败、下载器提交失败、参数校验。
 站点访问与下载器适配器均为假实现，不发真实网络请求。
 """
+
 from __future__ import annotations
 
 import pytest
@@ -120,6 +121,31 @@ def test_submit_success(client) -> None:
     assert req.save_path == "/downloads/movies"
     assert req.category == "movieclaw"
     assert req.tags == ["movieclaw-manual"]
+
+
+def test_submit_with_library_derives_save_path(client) -> None:
+    """带入库目标：保存目录 = 库主根/标题 (年份)，覆盖下载器默认目录。"""
+    _add_default_downloader(client)
+    lib = client.post(
+        "/api/v1/libraries",
+        json={"name": "电影库2", "kind": "movie", "root_paths": ["/vol1/media/movies"]},
+    ).json()["data"]
+    r = client.post(
+        "/api/v1/downloaders/submit",
+        json={**_SUBMIT, "library_id": lib["id"], "title": "沙丘", "year": 2021},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert "入库到「电影库2」" in body["message"]
+    assert body["data"]["save_path"] == "/vol1/media/movies/沙丘 (2021)"
+    assert _captured_requests[-1].save_path == "/vol1/media/movies/沙丘 (2021)"
+
+    # 只选库不带标题：落库主根（身份未确认时不造目录名）
+    r = client.post(
+        "/api/v1/downloaders/submit",
+        json={**_SUBMIT, "download_url": "https://example.org/dl?id=2", "library_id": lib["id"]},
+    )
+    assert r.json()["data"]["save_path"] == "/vol1/media/movies"
 
 
 def test_submit_duplicate_is_idempotent(client) -> None:

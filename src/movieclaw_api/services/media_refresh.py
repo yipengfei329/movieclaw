@@ -169,9 +169,12 @@ async def _grow_and_sync(
     repo = SubscriptionRepository(session)
     assert subscription.id is not None
     existing = {
-        (w.season_number, w.episode_number): w
-        for w in await repo.list_wanted(subscription.id)
+        (w.season_number, w.episode_number): w for w in await repo.list_wanted(subscription.id)
     }
+    # 库存 H：库里已有的单元不再补单（E−H 用真实的 H，媒体库 L3 联通）
+    from movieclaw_db.repositories.library_file_repo import LibraryFileRepository
+
+    owned = await LibraryFileRepository(session).owned_units(subscription.media_item_id)
 
     to_add: list[WantedItem] = []
     for unit in expected:
@@ -182,6 +185,8 @@ async def _grow_and_sync(
                 # 早已存在于季集数据、但不在工单里的单元属于历史 diff 结果
                 # （如追新期间被移除），不因刷新复活——只有**新出现的集**才补
                 continue
+            if key in owned:
+                continue  # 库里已经有这一集，无需追
             next_search, priority = schedule_for(subscription.kind, unit)
             to_add.append(
                 WantedItem(
@@ -216,12 +221,8 @@ async def _grow_and_sync(
             SubscriptionActivity(
                 subscription_id=subscription.id,
                 type=ActivityType.WANTED_ADDED,
-                message=(
-                    f"元数据刷新发现 {len(to_add)} 个新集（{label} 起），已加入追踪"
-                ),
-                payload={
-                    "units": [[w.season_number, w.episode_number] for w in to_add]
-                },
+                message=(f"元数据刷新发现 {len(to_add)} 个新集（{label} 起），已加入追踪"),
+                payload={"units": [[w.season_number, w.episode_number] for w in to_add]},
             )
         )
         logger.info("《%s》发现 %d 个新集，已补工单", item.title, len(to_add))

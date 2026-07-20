@@ -78,3 +78,27 @@ class DownloaderInfo(BaseModel):
 
     type: DownloaderType
     version: str
+
+
+class TorrentFile(BaseModel):
+    """下载任务内的单个文件（路径是种子内相对路径）。"""
+
+    path: str
+    size_bytes: int
+
+
+class TorrentStatus(BaseModel):
+    """下载任务的当前状态（get_torrent 的返回，入库管线的输入）。
+
+    ``save_path`` 是**下载器视角**的保存目录；movieclaw 与下载器不同容器/
+    机器时该路径可能在本进程不可达，入库管线要对此给出可读的中文报错
+    （容器路径映射问题，见 docs/design/library.md 第 6 节风险③）。
+    """
+
+    info_hash: str
+    name: str
+    # 下载进度 0.0 ~ 1.0；completed = 全部数据已落盘（做种/完成态）
+    progress: float
+    completed: bool
+    save_path: str
+    files: list[TorrentFile] = Field(default_factory=list)

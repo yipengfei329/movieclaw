@@ -17,7 +17,7 @@ async function unwrap<T>(promise: Promise<ApiEnvelope<T>>): Promise<T> {
 export type SubscriptionStatus = "active" | "paused" | "completed";
 
 /** 工单状态机（见 movieclaw_db WantedStatus） */
-export type WantedStatus = "wanted" | "grabbed" | "downloaded";
+export type WantedStatus = "wanted" | "grabbed" | "downloaded" | "imported";
 
 /** 条目摘要（见 schemas.subscription.MediaBrief） */
 export interface SubscriptionMedia {
@@ -40,6 +40,8 @@ export interface SeasonOverview {
   episode_count: number | null;
   /** 已播集数（air_date<=今天） */
   aired_count: number;
+  /** 媒体库已有的集数（库存 H） */
+  owned_count: number;
 }
 
 /** 豆瓣收敛歧义时的确认候选 */
@@ -57,6 +59,8 @@ export interface PrepareResult {
   media: SubscriptionMedia | null;
   seasons: SeasonOverview[];
   existing_subscription_id: number | null;
+  /** 电影：媒体库里已有本片（弹层提示，不拦订阅） */
+  movie_owned: boolean;
   candidates: ResolveCandidate[];
 }
 
@@ -66,6 +70,8 @@ export interface SubscriptionProgress {
   wanted: number;
   grabbed: number;
   downloaded: number;
+  /** 已整理入库（终态） */
+  imported: number;
 }
 
 export interface Subscription {
@@ -75,6 +81,8 @@ export interface Subscription {
   selected_seasons: number[];
   follow_future: boolean;
   rule_set_id: number;
+  /** 入库目标库；null = 该类型的默认库 */
+  library_id: number | null;
   progress: SubscriptionProgress;
   created_at: string;
   updated_at: string;
@@ -91,6 +99,8 @@ export interface WantedItem {
   search_attempts: number;
   last_search_at: string | null;
   grabbed_at: string | null;
+  downloaded_at: string | null;
+  imported_at: string | null;
 }
 
 export interface SubscriptionDetail extends Subscription {
@@ -120,6 +130,8 @@ export interface CreateSubscriptionPayload {
   selected_seasons?: number[];
   follow_future?: boolean;
   rule_set_id?: number | null;
+  /** 入库目标库；缺省用该类型的默认库 */
+  library_id?: number | null;
   douban_id?: string | null;
 }
 
@@ -166,6 +178,8 @@ export function updateSubscription(
     selected_seasons?: number[];
     follow_future?: boolean;
     rule_set_id?: number;
+    /** 换入库目标库；缺省不变 */
+    library_id?: number;
   },
 ): Promise<SubscriptionDetail> {
   return unwrap(

@@ -3,16 +3,18 @@
 import type { Route } from "next";
 import Link from "next/link";
 
-import { PlayIcon, PlusIcon, StarIcon } from "@/components/icons";
+import { PlayIcon, StarIcon } from "@/components/icons";
+import { PosterImage } from "@/components/poster-image";
+import { useSubscribeEntry } from "@/components/subscribe-entry";
 import { useMediaDetail } from "@/lib/media-detail";
-import type { MediaItem } from "@/lib/media-types";
+import type { MediaItem, MediaType } from "@/lib/media-types";
 
 /**
  * 海报卡片：发现页海报墙的最小单元（Netflix 式）。
  *
  * 结构分两层：
  *   - 海报区：2:3 竖版海报，常显「评分徽章（右上）+ 最高清晰度徽章（左上）」；
- *     hover 时整卡上浮、海报放大，底部升起渐变信息层（类型 / 简介 / 订阅与想看按钮）。
+ *     hover 时整卡上浮、海报放大，底部升起渐变信息层（类型 / 简介 / 订阅影片按钮）。
  *   - 文字区：海报下方常显标题与「年份 · 规模」，保证不 hover 也能扫读海报墙。
  *
  * ranked 模式（Top 10 行）：海报左侧叠一个 Netflix 式描边大数字，
@@ -34,6 +36,8 @@ export interface PosterVisualItem {
   rating: number;
   posterUrl: string;
   source?: "tmdb" | "douban";
+  /** 电影/剧集；豆瓣轻量搜索结果没有该字段，订阅入口点击时补拉详情识别 */
+  type?: MediaType;
   year?: number;
   genres?: string[];
   extent?: string;
@@ -90,6 +94,7 @@ function PosterCardContent({
   item: PosterVisualItem;
   rank?: number;
 }) {
+  const { open: openSubscribe } = useSubscribeEntry();
   const badges = item.badges ?? [];
   const genres = item.genres ?? [];
   const overview = item.overview ?? "";
@@ -117,12 +122,10 @@ function PosterCardContent({
             rank !== undefined ? "ml-11 w-[144px]" : "w-full"
           }`}
         >
-          <img
+          <PosterImage
             src={item.posterUrl}
             alt={`${item.title} 海报`}
-            loading="lazy"
-            referrerPolicy="no-referrer"
-            className="absolute inset-0 size-full object-cover transition-transform duration-500 ease-out group-hover/card:scale-[1.06]"
+            className="absolute inset-0 size-full transition-transform duration-500 ease-out group-hover/card:scale-[1.06]"
           />
 
           {/* 左上：资源最高清晰度徽章（无资源信息时不渲染） */}
@@ -152,19 +155,29 @@ function PosterCardContent({
               </p>
             )}
             <div className="mt-2.5 flex items-center gap-2">
+              {/* 全站统一的唯一操作：订阅影片（打开订阅弹层）。外层整卡是
+                  button/Link，内层不能再嵌 button，用 role=button 的 span 承载；
+                  preventDefault 拦掉 Link 跳转，stopPropagation 拦掉整卡 onClick。 */}
               <span
-                className={`btn-accent flex h-7 items-center rounded-full text-[11px] font-semibold ${
-                  item.source === "douban" ? "px-2.5" : "gap-1 px-3"
-                }`}
+                role="button"
+                tabIndex={0}
+                aria-label={`订阅《${item.title}》`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  void openSubscribe(item);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void openSubscribe(item);
+                  }
+                }}
+                className="btn-accent flex h-7 items-center gap-1 rounded-full px-3 text-[11px] font-semibold"
               >
-                {item.source !== "douban" && <PlayIcon className="size-3" />}
-                {item.source === "douban" ? "豆瓣" : "订阅追踪"}
-              </span>
-              <span
-                className="flex size-7 items-center justify-center rounded-full border border-white/25 bg-white/10 text-white backdrop-blur-sm transition-colors hover:border-white/50"
-                title="加入想看"
-              >
-                <PlusIcon className="size-3.5" />
+                <PlayIcon className="size-3" />
+                订阅影片
               </span>
             </div>
           </div>

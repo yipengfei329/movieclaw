@@ -17,12 +17,14 @@ class SubscriptionStatus(StrEnum):
     PAUSED = "paused"  # 用户暂停：worker 与被动匹配跳过其工单
     COMPLETED = "completed"  # 缺口为零且期望集合不再生长
 
+
 class WantedStatus(StrEnum):
     """工单状态机：每一步对应不可逆的现实事件。"""
 
     WANTED = "wanted"  # 缺着（这个子集才是"缺口"）
     GRABBED = "grabbed"  # 已向下载器投递成功
-    DOWNLOADED = "downloaded"  # 下载器确认文件落地（P5 起启用）
+    DOWNLOADED = "downloaded"  # 下载器确认文件全部落盘
+    IMPORTED = "imported"  # 已整理入库（硬链到库目录 + library_file 落账）——终态
 
 
 class Subscription(TimestampMixin, table=True):
@@ -66,11 +68,23 @@ class Subscription(TimestampMixin, table=True):
         default=False, description="追新开关：订阅后播出的一切集（含新集/新季）自动纳入"
     )
 
+    # -- 入库目标 -----------------------------------------------------------
+    # NULL = 用该 kind 的默认库；库被删除时外键 SET NULL，自动回落默认。
+    # 投递 save_path 由库主根推导（services.library_config.derive_save_path）。
+    library_id: int | None = Field(
+        default=None,
+        sa_column=Column(
+            Integer,
+            ForeignKey("library.id", ondelete="SET NULL"),
+            nullable=True,
+            index=True,
+        ),
+        description="入库到哪个媒体库；NULL=该类型的默认库",
+    )
+
     # -- 载体规则（只持引用，不做 override）---------------------------------
     rule_set_id: int = Field(
-        sa_column=Column(
-            Integer, ForeignKey("rule_set.id"), nullable=False, index=True
-        ),
+        sa_column=Column(Integer, ForeignKey("rule_set.id"), nullable=False, index=True),
         description="引用的规则组；规则组被引用时禁删（服务层保证）",
     )
 
@@ -109,7 +123,9 @@ class WantedItem(TimestampMixin, table=True):
     __table_args__ = (
         # 不变量①：每个期望单元至多一个工单
         UniqueConstraint(
-            "subscription_id", "season_number", "episode_number",
+            "subscription_id",
+            "season_number",
+            "episode_number",
             name="uq_wanted_sub_season_episode",
         ),
         # 被动匹配直达索引：种子 → 条目 → 未满足工单，一次查询不 join 订阅
@@ -155,3 +171,12 @@ class WantedItem(TimestampMixin, table=True):
     last_search_at: datetime | None = Field(default=None, description="上次搜索时间")
 
     grabbed_at: datetime | None = Field(default=None, description="投递成功时间")
+
+    # -- 入库管线（媒体库 L2）------------------------------------------------
+    # 真实投递成功时记录种子 infohash——check_download_progress 据此轮询
+    # 下载器进度；dry-run 投递不产生 infohash，工单停在 grabbed 不进管线。
+    info_hash: str | None = Field(
+        default=None, index=True, description="投递种子的 infohash；NULL=模拟投递/未投递"
+    )
+    downloaded_at: datetime | None = Field(default=None, description="下载器确认完成时间")
+    imported_at: datetime | None = Field(default=None, description="整理入库完成时间")

@@ -7,6 +7,7 @@ from movieclaw_downloader.models import (
     DownloaderInfo,
     DownloadRequest,
     SubmitResult,
+    TorrentStatus,
 )
 from movieclaw_downloader.torrent import compute_info_hash, parse_magnet_info_hash
 
@@ -29,6 +30,13 @@ class BaseDownloader(abc.ABC):
     @abc.abstractmethod
     async def submit(self, request: DownloadRequest) -> SubmitResult:
         """提交一个下载任务。"""
+
+    @abc.abstractmethod
+    async def get_torrent(self, info_hash: str) -> TorrentStatus | None:
+        """按 infohash 查询下载任务的进度与文件清单；不存在返回 None。
+
+        入库管线据此判断"下载器确认完成"（completed）并拿到文件的落盘位置。
+        """
 
     @abc.abstractmethod
     async def test_connection(self) -> DownloaderInfo:

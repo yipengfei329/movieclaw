@@ -12,6 +12,7 @@ import {
   StarIcon,
 } from "@/components/icons";
 import { MediaRow } from "@/components/media-row";
+import { PosterImage } from "@/components/poster-image";
 import { fetchDiscoverPage } from "@/lib/api/discover";
 import { useMediaDetail } from "@/lib/media-detail";
 import type {
@@ -275,7 +276,7 @@ function HeroSlide({ item, active }: { item: MediaItem; active: boolean }) {
       }`}
     >
       {/* 宽幅剧照 + 双层渐变蒙版：左侧压暗保文字可读，底部渐隐融入页面 */}
-      <img
+      <PosterImage
         src={item.backdropUrl}
         alt={`${item.title} 剧照`}
         className={`absolute inset-0 size-full object-cover object-top transition-transform duration-[9000ms] ease-linear ${

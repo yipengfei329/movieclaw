@@ -9,10 +9,12 @@ from movieclaw_db.models.base import TimestampMixin
 
 
 class MediaItem(TimestampMixin, table=True):
-    """统一媒体条目——订阅与资源匹配的身份锚点。
+    """统一媒体条目——订阅、资源匹配与媒体库共同的身份锚点。
 
     定位
     ----
+    订阅（期望 E）、种子匹配、媒体库文件台账（库存 H，L2 起）都锚定本表，
+    谁也不拥有它——这是"订阅↔库存同锚"的前提（docs/design/library.md 第 0 节）。
     任何入口（TMDB 发现页、豆瓣、未来其他源）的订阅都收敛为本表的一行，
     以 ``(kind, tmdb_id)`` 为唯一锚。本表**不是 TMDB 镜像**，只存"订阅逻辑
     与匹配内核会消费"的最小闭包字段：外部 ID、标题与别名集合、年份、status、

@@ -15,6 +15,7 @@
     "@radix-ui/react-dropdown-menu": "^2.1.20",
     "@shikijs/langs": "^4.3.1",
     "@shikijs/themes": "^4.3.1",
+    "@tanstack/react-virtual": "^3.14.6",
     "dayjs": "^1.11.21",
     "next": "^15.5.2",
     "react": "^19.1.1",

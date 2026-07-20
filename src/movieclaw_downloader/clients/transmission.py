@@ -34,6 +34,8 @@ from movieclaw_downloader.models import (
     DownloaderType,
     DownloadRequest,
     SubmitResult,
+    TorrentFile,
+    TorrentStatus,
 )
 
 logger = logging.getLogger("movieclaw_downloader.transmission")
@@ -127,6 +129,29 @@ class TransmissionDownloader(BaseDownloader):
         result_hash = info_hash or torrent.hash_string
         logger.info("已提交种子到 Transmission: hash=%s name=%s", result_hash, torrent.name)
         return SubmitResult(info_hash=result_hash, name=torrent.name)
+
+    async def get_torrent(self, info_hash: str) -> TorrentStatus | None:
+        return await asyncio.to_thread(self._get_torrent_sync, info_hash)
+
+    def _get_torrent_sync(self, info_hash: str) -> TorrentStatus | None:
+        client = self._client()
+        with _translate_errors(self.config.url):
+            try:
+                torrent = client.get_torrent(info_hash)
+            except KeyError:
+                return None
+        return TorrentStatus(
+            info_hash=info_hash,
+            name=torrent.name,
+            progress=float(torrent.percent_done),
+            completed=float(torrent.percent_done) >= 1.0,
+            save_path=torrent.download_dir,
+            files=[
+                # file.name 是种子内相对路径（含顶层目录）
+                TorrentFile(path=file.name, size_bytes=int(file.size))
+                for file in torrent.get_files()
+            ],
+        )
 
     async def test_connection(self) -> DownloaderInfo:
         return await asyncio.to_thread(self._test_connection_sync)

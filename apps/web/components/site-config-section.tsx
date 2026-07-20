@@ -636,7 +636,7 @@ function SiteForm({ item, site, busy, onSubmit }: SiteFormProps) {
   function submit() {
     const payload: SiteConfigPayload = { auth_type: authType, enabled: site?.enabled ?? true };
     for (const f of fields) {
-      (payload as Record<string, unknown>)[f] = values[f]?.trim() ?? "";
+      (payload as unknown as Record<string, unknown>)[f] = values[f]?.trim() ?? "";
     }
     onSubmit(payload);
   }

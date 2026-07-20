@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ArrowLeftIcon } from "@/components/icons";
+import { PosterImage } from "@/components/poster-image";
 import {
   deleteSubscription,
   getSubscription,
@@ -127,10 +128,10 @@ export function SubscriptionInspectorView({ id }: { id: number }) {
             href={`/media/${detail.media.kind}/${detail.media.tmdb_id}`}
             className="block w-[72px] shrink-0 overflow-hidden rounded-lg ring-1 ring-white/15"
           >
-            <img
+            <PosterImage
               src={cachedImageUrl(detail.media.poster_url)}
               alt={`${detail.media.title} 海报`}
-              className="aspect-[2/3] w-full bg-[#141824] object-cover"
+              className="aspect-[2/3] w-full"
             />
           </Link>
         )}

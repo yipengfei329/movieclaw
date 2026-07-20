@@ -6,6 +6,7 @@ import { createPortal } from "react-dom";
 import {
   BookmarkIcon,
   ClockIcon,
+  LayersIcon,
   MoreIcon,
   PanelLeftIcon,
   PencilIcon,
@@ -47,9 +48,10 @@ export interface SidebarProps {
   flat?: boolean;
 }
 
-/** 主导航：新任务 / 订阅 + 探索项，合并成一列扁平列表 */
+/** 主导航：新任务 / 媒体库 / 订阅 + 探索项，合并成一列扁平列表 */
 const mainNavItems = [
   { id: "new", label: "新任务", icon: PlusIcon },
+  { id: "library", label: "媒体库", icon: LayersIcon },
   { id: "subscriptions", label: "订阅", icon: BookmarkIcon },
   ...exploreItems,
 ];
@@ -302,6 +304,7 @@ function RunRow({
         type="button"
         data-active={active}
         onClick={onClick}
+        title={`更新于 ${time}`}
         className="glass-row nav-item items-center gap-2.5 px-2.5 py-1"
       >
         {/* 状态点：仿 ChatGPT 的极简指示。容器始终占位（size-[7px]）以保证所有标题左对齐，
@@ -314,13 +317,17 @@ function RunRow({
             </>
           )}
         </span>
-        <span className="truncate flex-1 text-[13px] font-medium text-[var(--text)]">{title}</span>
+        {/* 标题占满整行，右端渐变透明淡出（无省略号）；悬停/菜单打开时淡出区
+            加宽，行尾按钮直接浮在淡出区上——文字看起来「渐隐进」按钮下方。
+            用 mask 而非渐变色遮罩：侧栏底是 WebGL 玻璃，没有可匹配的实色。 */}
         <span
-          className={`tnum shrink-0 text-[10px] text-[var(--text-faint)] transition-opacity ${
-            open ? "opacity-0" : "group-hover/run:opacity-0"
+          className={`flex-1 overflow-hidden whitespace-nowrap text-[13px] font-medium text-[var(--text)] ${
+            open
+              ? "[mask-image:linear-gradient(to_right,#000_calc(100%_-_44px),transparent_calc(100%_-_12px))]"
+              : "[mask-image:linear-gradient(to_right,#000_calc(100%_-_16px),transparent)] group-hover/run:[mask-image:linear-gradient(to_right,#000_calc(100%_-_44px),transparent_calc(100%_-_12px))]"
           }`}
         >
-          {time}
+          {title}
         </span>
       </button>
 
@@ -337,7 +344,7 @@ function RunRow({
           const rect = e.currentTarget.getBoundingClientRect();
           setMenuPos({ left: rect.right - 144, top: rect.bottom + 6 });
         }}
-        className={`glass-row !absolute right-1.5 top-1/2 !size-6 -translate-y-1/2 justify-center !rounded-md !p-0 transition-opacity ${
+        className={`glass-row !absolute right-1.5 top-1/2 !size-6 -translate-y-1/2 justify-center !rounded-md !p-0 transition-opacity duration-200 ${
           open ? "opacity-100" : "opacity-0 group-hover/run:opacity-100"
         }`}
       >

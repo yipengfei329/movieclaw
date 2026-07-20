@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { CheckIcon } from "@/components/icons";
+import { PosterImage } from "@/components/poster-image";
+import { listLibraries, type MediaLibrary } from "@/lib/api/libraries";
 import {
   createSubscription,
   deleteSubscription,
@@ -53,9 +55,11 @@ export function SubscribeDialog({
   const [prepared, setPrepared] = useState<PrepareResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ruleSets, setRuleSets] = useState<RuleSet[]>([]);
+  const [libraries, setLibraries] = useState<MediaLibrary[]>([]);
   const [selectedSeasons, setSelectedSeasons] = useState<Set<number>>(new Set());
   const [followFuture, setFollowFuture] = useState(false);
   const [ruleSetId, setRuleSetId] = useState<number | null>(null);
+  const [libraryId, setLibraryId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
 
   /** 预检并按结果初始化表单默认值（候选确认后会带着 tmdbId 再次进入）。 */
@@ -64,7 +68,7 @@ export function SubscribeDialog({
       setPrepared(null);
       setError(null);
       try {
-        const [result, rules] = await Promise.all([
+        const [result, rules, libs] = await Promise.all([
           prepareSubscription(
             t.source === "douban" && !t.tmdbId
               ? {
@@ -77,9 +81,12 @@ export function SubscribeDialog({
               : { source: "tmdb", kind: t.kind, tmdb_id: t.tmdbId, douban_id: t.doubanId },
           ),
           listRuleSets(),
+          listLibraries(t.kind),
         ]);
         setRuleSets(rules);
         setRuleSetId(rules.find((r) => r.is_default)?.id ?? rules[0]?.id ?? null);
+        setLibraries(libs);
+        setLibraryId(libs.find((l) => l.is_default)?.id ?? libs[0]?.id ?? null);
         setPrepared(result);
         // 默认勾选全部已播出的正季；在播剧默认追新
         const airedSeasons = result.seasons
@@ -132,6 +139,7 @@ export function SubscribeDialog({
         selected_seasons: [...selectedSeasons].sort((a, b) => a - b),
         follow_future: followFuture,
         rule_set_id: ruleSetId,
+        library_id: libraryId,
         douban_id: target.doubanId ?? null,
       });
       onChanged?.();
@@ -226,13 +234,11 @@ export function SubscribeDialog({
                     className="group text-left"
                   >
                     <div className="aspect-[2/3] overflow-hidden rounded-lg bg-[#141824] ring-1 ring-white/10 transition group-hover:ring-white/40">
-                      {c.poster_url && (
-                        <img
-                          src={cachedImageUrl(c.poster_url)}
-                          alt={c.title}
-                          className="size-full object-cover"
-                        />
-                      )}
+                      <PosterImage
+                        src={c.poster_url ? cachedImageUrl(c.poster_url) : undefined}
+                        alt={c.title}
+                        className="size-full"
+                      />
                     </div>
                     <p className="mt-1.5 truncate text-[12px] text-white/90">{c.title}</p>
                     <p className="truncate text-[11px] text-[var(--text-faint)]">
@@ -275,6 +281,12 @@ export function SubscribeDialog({
           {/* —— 订阅表单 —— */}
           {prepared?.status === "ready" && !prepared.existing_subscription_id && (
             <div className="mt-4 space-y-5">
+              {prepared.movie_owned && (
+                <p className="flex items-center gap-2 rounded-xl border border-[#4ade80]/25 bg-[#4ade80]/10 px-3.5 py-2.5 text-[12.5px] text-[#4ade80]">
+                  <CheckIcon className="size-4 shrink-0" />
+                  媒体库里已有这部电影，订阅后不会重复下载
+                </p>
+              )}
               {prepared.media?.kind === "tv" && (
                 <section>
                   <h3 className="mb-2 text-[13px] font-semibold text-white/85">
@@ -331,6 +343,37 @@ export function SubscribeDialog({
                 </section>
               )}
 
+              {libraries.length > 0 && (
+                <section>
+                  <h3 className="mb-2 text-[13px] font-semibold text-white/85">入库到</h3>
+                  <select
+                    value={libraryId ?? undefined}
+                    onChange={(e) => setLibraryId(Number(e.target.value))}
+                    className="w-full rounded-xl border border-white/[0.08] bg-white/[0.04] px-3.5 py-2.5 text-[13px] text-white/90 outline-none focus:border-white/25 [&>option]:bg-[#181c28]"
+                  >
+                    {libraries.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.name}
+                        {l.is_default ? "（默认）" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  {/* 落盘路径预览：主根/标题 (年份)，与后端推导规则一致 */}
+                  {(() => {
+                    const lib = libraries.find((l) => l.id === libraryId);
+                    if (!lib?.primary_root || !prepared.media) return null;
+                    const folder = `${prepared.media.title}${
+                      prepared.media.year ? ` (${prepared.media.year})` : ""
+                    }`;
+                    return (
+                      <p className="mt-1.5 truncate text-[11.5px] text-[var(--text-faint)]">
+                        将保存到 {lib.primary_root.replace(/\/+$/, "")}/{folder}
+                      </p>
+                    );
+                  })()}
+                </section>
+              )}
+
               <div className="flex justify-end gap-3 pt-1">
                 <button
                   type="button"
@@ -375,6 +418,13 @@ function SeasonRow({
         : season.aired_count > 0
           ? `已播 ${season.aired_count} 集`
           : "未播出";
+  // 库存提示（媒体库联通）：已有的集不会重复下载
+  const owned =
+    season.owned_count > 0
+      ? season.owned_count >= total && total > 0
+        ? "整季已在库"
+        : `库里已有 ${season.owned_count} 集`
+      : null;
   return (
     <label
       className={`flex cursor-pointer items-center justify-between rounded-xl border px-4 py-2.5 transition ${
@@ -388,6 +438,9 @@ function SeasonRow({
           {season.season_number === 0 ? "特别篇" : `第 ${season.season_number} 季`}
         </span>
         <span className="tnum text-[11.5px] text-[var(--text-faint)]">{progress}</span>
+        {owned && (
+          <span className="tnum text-[11.5px] font-medium text-[#4ade80]/90">{owned}</span>
+        )}
       </span>
       <input
         type="checkbox"

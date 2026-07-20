@@ -7,6 +7,7 @@
 3. 守护测试（默认拒绝兜底）：匿名遍历 OpenAPI 里的**每一条**路由，
    凡不在公开白名单里的必须 401。以后新增路由忘挂鉴权，这里直接红。
 """
+
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
@@ -81,13 +82,9 @@ def test_bootstrap_rejects_second_attempt(client: TestClient) -> None:
 
 def test_bootstrap_concurrent_requests_only_one_wins(client: TestClient) -> None:
     """并发建号：同时打进来的请求最多只有一个成功（asyncio 锁串行化）。"""
-    payloads = [
-        {"username": f"user{i}", "password": f"password-{i:02d}"} for i in range(8)
-    ]
+    payloads = [{"username": f"user{i}", "password": f"password-{i:02d}"} for i in range(8)]
     with ThreadPoolExecutor(max_workers=8) as pool:
-        responses = list(
-            pool.map(lambda p: client.post(f"{_AUTH}/bootstrap", json=p), payloads)
-        )
+        responses = list(pool.map(lambda p: client.post(f"{_AUTH}/bootstrap", json=p), payloads))
 
     codes = sorted(r.status_code for r in responses)
     assert codes.count(200) == 1, f"并发建号应恰好一个成功，实际：{codes}"
@@ -250,12 +247,14 @@ def test_every_route_denies_anonymous_access(client: TestClient) -> None:
             .replace("{kind}", "movie")
             .replace("{tmdb_id}", "1")
             .replace("{douban_id}", "26266893")
-                .replace("{subscription_id}", "1")
-                .replace("{rule_set_id}", "1")
-                .replace("{run_id}", "test-run")
-                .replace("{session_id}", "test-session")
-                .replace("{day}", "2026-01-01")
-            )
+            .replace("{subscription_id}", "1")
+            .replace("{rule_set_id}", "1")
+            .replace("{library_id}", "1")
+            .replace("{file_id}", "1")
+            .replace("{run_id}", "test-run")
+            .replace("{session_id}", "test-session")
+            .replace("{day}", "2026-01-01")
+        )
         assert "{" not in url, f"守护测试不认识路径参数，请补充哑值：{path}"
         for method in methods:
             if (method.upper(), path) in _PUBLIC_ALLOWLIST:

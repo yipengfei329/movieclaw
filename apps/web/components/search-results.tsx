@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { ImageLightbox } from "@/components/image-lightbox";
 import { LayersIcon, ListIcon, PhotoIcon } from "@/components/icons";
+import { PosterImage } from "@/components/poster-image";
 import { Tooltip } from "@/components/tooltip";
 import type { SearchScope } from "@/lib/categories";
 import {
@@ -14,6 +15,7 @@ import {
   type TorrentHit,
 } from "@/lib/api/search";
 import { submitTorrentDownload } from "@/lib/api/downloaders";
+import { defaultLibraryFor } from "@/lib/api/libraries";
 import { cachedImageUrl } from "@/lib/image-proxy";
 import { formatDateTime, formatRelativeTime } from "@/lib/time";
 
@@ -1482,7 +1484,7 @@ function PosterResults({ hits }: { hits: TorrentHit[] }) {
       {withPoster.length > 0 && (
         <ul className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3">
           {withPoster.map((hit) => (
-            <PosterCard key={`${hit.site_id}:${hit.torrent_id}`} hit={hit} />
+            <TorrentPosterCard key={`${hit.site_id}:${hit.torrent_id}`} hit={hit} />
           ))}
         </ul>
       )}
@@ -1505,11 +1507,12 @@ function PosterResults({ hits }: { hits: TorrentHit[] }) {
 }
 
 /**
- * 海报卡片：2:3 竖版海报 + 底部渐变上的标题/来源，hover 浮出详情/下载。
+ * 种子海报卡片：2:3 竖版海报 + 底部渐变上的标题/来源，hover 浮出详情/下载。
+ * 与媒体条目的 PosterCard（components/poster-card.tsx）是两套东西——这里的数据
+ * 是 TorrentHit，徽章是促销信息，点击弹多图灯箱而非进详情页，故不共用卡片层，
+ * 仅通过 PosterImage 共用海报图片底座（懒加载 / no-referrer / 失败回退）。
  * 点击卡片弹出多图灯箱（海报 + image_urls 里的截图等），多图时右上角
  * 显示张数徽标；hover 上的详情/下载链接 stopPropagation，不触发灯箱。
- * 海报加载失败（防盗链/图床失效）回退为深色占位——卡片不塌陷、信息仍可读。
- * referrerPolicy=no-referrer：豆瓣等图床按 Referer 拒绝外链，不带即可正常加载。
  */
 /**
  * 海报卡片左上角的促销徽标（免费 / 折扣 / 双倍上传 / H&R）。
@@ -1537,8 +1540,7 @@ function posterPromoBadges(hit: TorrentHit): { text: string; cls: string }[] {
   return badges;
 }
 
-function PosterCard({ hit }: { hit: TorrentHit }) {
-  const [broken, setBroken] = useState(false);
+function TorrentPosterCard({ hit }: { hit: TorrentHit }) {
   const [viewerOpen, setViewerOpen] = useState(false);
   const size = hit.size ?? formatBytes(hit.size_bytes);
   const name = parsedName(hit);
@@ -1564,23 +1566,19 @@ function PosterCard({ hit }: { hit: TorrentHit }) {
         }}
         className="relative aspect-[2/3] cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
       >
-        {!broken && hit.poster_url ? (
-          <img
-            src={cachedImageUrl(hit.poster_url)}
-            alt={hit.title}
-            loading="lazy"
-            referrerPolicy="no-referrer"
-            onError={() => setBroken(true)}
-            className="absolute inset-0 h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.04]"
-          />
-        ) : (
-          // 占位：海报加载失败时的深色底 + 居中站点名
-          <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-b from-white/[0.05] to-black/40">
-            <span className="px-3 text-center text-[11px] text-[var(--text-faint)]">
-              {hit.site_name}
-            </span>
-          </div>
-        )}
+        <PosterImage
+          src={hit.poster_url ? cachedImageUrl(hit.poster_url) : undefined}
+          alt={hit.title}
+          className="absolute inset-0 size-full transition-transform duration-500 ease-out group-hover:scale-[1.04]"
+          fallback={
+            // 占位：海报缺失/加载失败时的深色底 + 居中站点名
+            <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-b from-white/[0.05] to-black/40">
+              <span className="px-3 text-center text-[11px] text-[var(--text-faint)]">
+                {hit.site_name}
+              </span>
+            </div>
+          }
+        />
         {/* 顶部徽标：左上留给促销（免费最醒目，是下载与否的决策关键），右上图片张数。
             站点名不占这个最显眼的位置——它是次要的来源信息，下沉到底部弱化展示。 */}
         <div className="absolute inset-x-1.5 top-1.5 flex items-start justify-between gap-1">
@@ -1675,8 +1673,10 @@ const DOWNLOAD_LABEL: Record<DownloadState, string> = {
 };
 
 /**
- * 下载按钮：把该种子提交到默认下载器。后端带站点登录态取回 .torrent，
- * 按下载器配置的默认目录提交（幂等，重复种子标记「已在下载器」）。
+ * 下载按钮：把该种子提交到默认下载器。后端带站点登录态取回 .torrent。
+ * 种子解析出了实体身份（类型+片名+年份）时，保存目录改为该类型**默认媒体库**
+ * 的规范路径（主根/标题 (年份)）——文件落盘后媒体库的实时监控会自动识别入账；
+ * 没有可靠身份则维持旧行为（下载器默认目录），不拿猜测污染库目录。
  * 结果就地反馈在按钮文字上，不弹窗打断浏览；失败可悬停看原因、点击重试。
  */
 function DownloadButton({ hit, className }: { hit: TorrentHit; className: string }) {
@@ -1692,9 +1692,21 @@ function DownloadButton({ hit, className }: { hit: TorrentHit; className: string
     setState("submitting");
     setError(null);
     try {
+      // 实体身份三件套齐全才入库（年份是防错挂的硬门槛）
+      const attrs = hit.attrs;
+      const title = attrs?.titles_zh?.[0] ?? attrs?.titles_en?.[0];
+      const mediaType =
+        attrs?.media_type === "movie" || attrs?.media_type === "tv"
+          ? attrs.media_type
+          : null;
+      const library =
+        title && attrs?.year != null ? await defaultLibraryFor(mediaType) : null;
       const result = await submitTorrentDownload({
         site_id: hit.site_id,
         download_url: hit.download_url,
+        ...(library && title
+          ? { library_id: library.id, title, year: attrs?.year ?? null }
+          : {}),
       });
       setState(result.already_exists ? "exists" : "done");
     } catch (err) {

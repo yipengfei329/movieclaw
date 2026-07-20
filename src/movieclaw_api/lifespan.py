@@ -75,6 +75,10 @@ def build_lifespan(settings: Settings):
         init_site_access()
         # 重启自愈：清理上次遗留的"验证中"状态
         await _reset_stale_verifying()
+        # 媒体库首启种子：库表为空时创建"电影库/剧集库"两个默认库
+        from movieclaw_api.services.library_config import seed_default_libraries
+
+        await seed_default_libraries(settings.library_default_root)
         # Agent 运行注册表必须与当前事件循环同生共死：它持有后台 task 和
         # asyncio.Condition，不能跨 FastAPI 生命周期复用。
         init_agent_run_registry()
@@ -93,10 +97,12 @@ def build_lifespan(settings: Settings):
         # 启动定时任务调度器：注册内置任务、从数据库重建 job 并开始调度。
         # 领域业务任务在此处 import 其任务模块以触发 @register_task 注册（须在 start() 前）。
         if settings.scheduler_enabled:
-            from movieclaw_api.services import torrent_sync  # noqa: F401  触发种子同步任务注册
-            from movieclaw_api.services import (  # noqa: F401  订阅管线三任务注册
+            from movieclaw_api.services import (  # noqa: F401  订阅管线三任务注册  # noqa: F401  下载完成检测与入库任务注册  # noqa: F401  媒体库对账任务注册
+                download_progress,
+                library_scan,
                 media_refresh,
                 torrent_matcher,
+                torrent_sync,  # noqa: F401  触发种子同步任务注册
                 wanted_search,
             )
 
@@ -109,10 +115,19 @@ def build_lifespan(settings: Settings):
             await get_scheduler().start()
         else:
             logger.info("定时任务调度器已按配置关闭（SCHEDULER_ENABLED=false）")
+        # 媒体库实时监控（L4）：库根路径文件事件 → 去抖 → 增量扫描；
+        # watchdog 缺失/根路径未就绪时优雅降级为仅对账任务兜底。
+        from movieclaw_api.services.library_watch import init_library_watcher
+
+        await init_library_watcher()
         logger.info("应用启动完成，数据库就绪")
         try:
             yield
         finally:
+            # 先停媒体库监听（观察者线程持有事件循环引用，须在循环关闭前退出）
+            from movieclaw_api.services.library_watch import close_library_watcher
+
+            await close_library_watcher()
             # 先停止 Agent，避免它在下游 HTTP 客户端和数据库开始释放后继续工作。
             await close_agent_run_registry()
             if settings.scheduler_enabled:

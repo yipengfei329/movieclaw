@@ -15,6 +15,7 @@ from movieclaw_api.services.downloader_config import (
     DownloaderConfigService,
     verify_downloader,
 )
+from movieclaw_api.services.library_config import LibraryConfigService, derive_save_path
 from movieclaw_api.services.torrent_submit import submit_torrent
 from movieclaw_db.engine import get_session
 
@@ -32,14 +33,25 @@ async def submit_download(
 ) -> ApiResponse[DownloadSubmitView]:
     """手动下载：带站点登录态取回 .torrent → 提交给默认下载器。
 
-    保存目录用默认下载器配置的默认目录（未配置则用下载器自身默认）。
+    保存目录三级取值：选了媒体库 → 库推导路径（主根/标题 (年份)，无标题时
+    落库主根）；未选库 → 默认下载器配置的默认目录 → 下载器自身默认。
     提交幂等：种子已在下载器中不视为错误，data.already_exists=true。
     """
+    library = None
+    derived_path = None
+    if payload.library_id is not None:
+        library = await LibraryConfigService(session).get(payload.library_id)
+        if payload.title:
+            derived_path = derive_save_path(library, title=payload.title, year=payload.year)
+        else:
+            derived_path = library.primary_root
+
     result, row = await submit_torrent(
         session,
         site_id=payload.site_id,
         download_url=payload.download_url,
         tags=["movieclaw-manual"],
+        save_path=derived_path,
     )
     assert row.id is not None  # 落库记录必有主键
     view = DownloadSubmitView(
@@ -48,13 +60,14 @@ async def submit_download(
         already_exists=result.already_exists,
         downloader_id=row.id,
         downloader_name=row.name,
-        save_path=row.save_path,
+        save_path=derived_path or row.save_path,
     )
-    message = (
-        "该种子已在下载器中，未重复添加"
-        if result.already_exists
-        else f"已提交到「{row.name}」"
-    )
+    if result.already_exists:
+        message = "该种子已在下载器中，未重复添加"
+    elif library is not None:
+        message = f"已提交到「{row.name}」，入库到「{library.name}」"
+    else:
+        message = f"已提交到「{row.name}」"
     return ok(view, message=message)
 
 

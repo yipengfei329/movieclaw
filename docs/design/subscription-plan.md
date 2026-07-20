@@ -252,9 +252,10 @@ apps/web/
 ### Phase 5 完成度补全（依赖 P4）
 | # | 事项 |
 |---|---|
-| 5.1 | `BaseDownloader.get_torrent` + 下载完成轮询任务 → `downloaded` 状态与 completed 汇总 |
+| 5.1 | ~~`BaseDownloader.get_torrent` + 下载完成轮询任务~~ → **并入媒体库计划 L2**（[library.md](library.md)）：下载完成检测与入库整理是同一条管线，终态收紧为 imported |
 | 5.2 | 订阅详情页：wanted 明细、匹配/拒绝历史、手动立即搜索 |
 | 5.3 | 暂停/恢复/编辑/删除的完整语义 |
+| 5.4 | 订阅挂媒体库（library.md L1.2/L1.3）：入库到哪个库 + 投递路径由库推导 |
 
 ### Phase 6 后续增强（本期不做，仅记录）
 洗版交互（cutoff 已在模型预留）/ 用户自定义规则订阅（内核天然支持）/ NER 双向校验接入

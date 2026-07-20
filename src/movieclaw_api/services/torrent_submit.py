@@ -4,7 +4,8 @@
 1. 通过站点访问管理器拿到已认证的站点客户端，用 download_url 取回 .torrent 字节
    （PT 站点的种子必须带登录态才能下载，不能把 URL 直接丢给下载器）；
 2. 选定**默认且可用**的下载器（is_default + enabled + 连接测试通过）；
-3. 按下载器配置的默认保存目录提交（save_path 为空则用下载器自身默认目录），
+3. 提交。保存目录三级取值：调用方给的 ``save_path``（媒体库推导的入库路径）
+   > 下载器配置的默认目录 > 下载器自身默认目录。
    提交幂等：种子已存在时不报错，结果里以 already_exists 标记。
 
 错误统一抛 AppException 子类，消息为可读中文——API 路由直接透传给前端展示，
@@ -35,11 +36,13 @@ async def submit_torrent(
     site_id: str,
     download_url: str | None,
     tags: list[str],
+    save_path: str | None = None,
 ) -> tuple[SubmitResult, DownloaderClient]:
     """从站点取回种子并提交到默认下载器，返回（提交结果, 所用下载器记录）。
 
     tags 用于区分来源（如手动 movieclaw-manual / 订阅 movieclaw-sub），
-    方便用户在下载器里筛选。
+    方便用户在下载器里筛选。save_path 由调用方按媒体库推导（缺省回落
+    下载器配置的默认目录）。
     """
     if not download_url:
         raise BadRequestException("该种子没有可用的下载入口（download_url 缺失）")
@@ -66,7 +69,8 @@ async def submit_torrent(
     if row is None:
         raise BadRequestException("没有可用的默认下载器（请在「设置 → 下载器」里添加并设为默认）")
 
-    # 3. 提交（保存目录用下载器配置的默认目录；幂等，重复种子不报错）
+    # 3. 提交（保存目录：库推导路径 > 下载器配置默认目录；幂等，重复种子不报错）
+    effective_save_path = save_path or row.save_path
     repo = DownloaderRepository(session)
     config = DownloaderConfig(
         type=row.client_type.value,
@@ -79,7 +83,7 @@ async def submit_torrent(
         submit_result = await downloader.submit(
             DownloadRequest(
                 torrent_bytes=torrent_bytes,
-                save_path=row.save_path,
+                save_path=effective_save_path,
                 category="movieclaw",
                 tags=tags,
             )
@@ -91,7 +95,11 @@ async def submit_torrent(
 
     logger.info(
         "种子已提交到下载器「%s」：site=%s name=%s hash=%s 已存在=%s 目录=%s",
-        row.name, site_id, submit_result.name, submit_result.info_hash,
-        submit_result.already_exists, row.save_path or "（下载器默认）",
+        row.name,
+        site_id,
+        submit_result.name,
+        submit_result.info_hash,
+        submit_result.already_exists,
+        effective_save_path or "（下载器默认）",
     )
     return submit_result, row

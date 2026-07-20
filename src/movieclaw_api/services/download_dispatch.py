@@ -58,9 +58,26 @@ async def dispatch(
     units_text = _units_text(claimed)
     spec_text = _describe(candidate)
 
+    # 入库目标预告：订阅指定的库（缺省该类型默认库）→ 目标 = 主根/标题 (年份)。
+    # L2 起下载本体落**下载器默认目录**（下载区），完成后由整理器硬链入库——
+    # 这里只解析目标路径用于时间线展示。dry-run 同样解析，可预览最终归宿。
+    from movieclaw_api.services.library_config import (
+        LibraryConfigService,
+        derive_save_path,
+    )
+
+    library = await LibraryConfigService(session).resolve_for_subscription(
+        subscription.library_id, subscription.kind
+    )
+    save_path = derive_save_path(library, title=item.title, year=item.year) if library else None
+    if library is not None and save_path is not None:
+        target_text = f"；下载完成后将入库到「{library.name}」：{save_path}"
+    else:
+        target_text = "；未配置媒体库，下载完成后不会自动整理入库"
+
     if not dry_run:
         try:
-            await _submit_real(session, candidate)
+            submit_result = await _submit_real(session, candidate)
         except Exception as exc:  # noqa: BLE001 -- 投递失败退回调度通道重试
             reason = f"{type(exc).__name__}: {exc}"
             await _rollback_claim(session, claimed, retry_delay=DISPATCH_RETRY_DELAY)
@@ -82,16 +99,35 @@ async def dispatch(
             )
             logger.warning(
                 "投递失败（%s）：《%s》%s ← %s/%s：%s",
-                source, item.title, units_text, candidate.site_id,
-                candidate.torrent_id, reason,
+                source,
+                item.title,
+                units_text,
+                candidate.site_id,
+                candidate.torrent_id,
+                reason,
             )
             return False
+        # 记录 infohash：完成轮询任务据此追踪下载进度并触发入库整理
+        if submit_result.info_hash:
+            now = utcnow()
+            for wanted in claimed:
+                await session.execute(
+                    update(WantedItem)
+                    .where(WantedItem.id == wanted.id)
+                    .values(info_hash=submit_result.info_hash, updated_at=now)
+                )
+            await session.commit()
 
     mode = "【模拟投递】" if dry_run else ""
     logger.info(
         "%s已投递（%s）：《%s》%s ← %s 的「%s」（%s）",
-        mode, source, item.title, units_text,
-        candidate.site_id, candidate.title[:80], spec_text,
+        mode,
+        source,
+        item.title,
+        units_text,
+        candidate.site_id,
+        candidate.title[:80],
+        spec_text,
     )
     await repo.add_activity(
         SubscriptionActivity(
@@ -101,6 +137,7 @@ async def dispatch(
             message=(
                 f"已投递{units_text}：来自 {candidate.site_id} 的"
                 f"「{candidate.title[:60]}」（{spec_text}）"
+                + target_text
                 + ("——模拟投递，未真实提交下载器" if dry_run else "")
             ),
             payload={
@@ -110,6 +147,8 @@ async def dispatch(
                 "source": source,
                 "dry_run": dry_run,
                 "units": [[w.season_number, w.episode_number] for w in claimed],
+                "library_id": library.id if library else None,
+                "save_path": save_path,
             },
         )
     )
@@ -137,9 +176,7 @@ async def _claim(session: AsyncSession, wanted_rows: list[WantedItem]) -> list[W
     return claimed
 
 
-async def _rollback_claim(
-    session: AsyncSession, claimed: list[WantedItem], *, retry_delay
-) -> None:
+async def _rollback_claim(session: AsyncSession, claimed: list[WantedItem], *, retry_delay) -> None:
     """投递失败：认领回滚，退回调度通道（next_search_at 短冷却）择机重试。"""
     now = utcnow()
     for wanted in claimed:
@@ -156,19 +193,22 @@ async def _rollback_claim(
     await session.commit()
 
 
-async def _submit_real(session: AsyncSession, candidate: TorrentCandidate) -> None:
+async def _submit_real(session: AsyncSession, candidate: TorrentCandidate):
     """真实投递：委托公共编排（站点取种 → 默认下载器提交，幂等判重）。
 
+    下载本体落**下载器默认目录**（下载区继续做种），入库由整理器硬链完成
+    （L2.4 语义切换）。返回 SubmitResult 供调用方记录 infohash。
     dry-run 关闭后才会走到这里。任何一步抛错由调用方统一回滚认领。
     """
     from movieclaw_api.services.torrent_submit import submit_torrent
 
-    await submit_torrent(
+    result, _row = await submit_torrent(
         session,
         site_id=candidate.site_id,
         download_url=candidate.download_url,
         tags=["movieclaw-sub"],
     )
+    return result
 
 
 def _describe(candidate: TorrentCandidate) -> str:

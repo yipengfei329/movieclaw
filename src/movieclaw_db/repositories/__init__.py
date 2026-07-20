@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from movieclaw_db.repositories.cookie_repo import CookieRepository
 from movieclaw_db.repositories.credential_repo import CredentialRepository
+from movieclaw_db.repositories.library_file_repo import LibraryFileRepository
+from movieclaw_db.repositories.library_repo import LibraryRepository
 from movieclaw_db.repositories.media_repo import MediaItemRepository
 from movieclaw_db.repositories.profile_repo import ProfileRepository
 from movieclaw_db.repositories.scheduled_task_repo import (
@@ -29,6 +31,8 @@ from movieclaw_db.repositories.torrent_repo import (
 __all__ = [
     "CookieRepository",
     "CredentialRepository",
+    "LibraryFileRepository",
+    "LibraryRepository",
     "MediaItemRepository",
     "ProfileRepository",
     "ScheduledTaskRepository",

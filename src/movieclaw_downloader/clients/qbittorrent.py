@@ -26,6 +26,8 @@ from movieclaw_downloader.models import (
     DownloaderType,
     DownloadRequest,
     SubmitResult,
+    TorrentFile,
+    TorrentStatus,
 )
 
 logger = logging.getLogger("movieclaw_downloader.qbittorrent")
@@ -132,6 +134,31 @@ class QBittorrentDownloader(BaseDownloader):
                 time.sleep(_LOOKUP_INTERVAL)
         logger.warning("提交成功但暂未在 qBittorrent 中查到种子: %s", info_hash)
         return ""
+
+    async def get_torrent(self, info_hash: str) -> TorrentStatus | None:
+        return await asyncio.to_thread(self._get_torrent_sync, info_hash)
+
+    def _get_torrent_sync(self, info_hash: str) -> TorrentStatus | None:
+        client = self._client()
+        with _translate_errors(self.config.url):
+            infos = client.torrents_info(torrent_hashes=info_hash)
+            if not infos:
+                return None
+            torrent = infos[0]
+            files = client.torrents_files(torrent_hash=info_hash)
+        return TorrentStatus(
+            info_hash=info_hash,
+            name=torrent.name,
+            progress=float(torrent.progress),
+            # progress==1 即全部数据落盘（此后进入做种/完成态）
+            completed=float(torrent.progress) >= 1.0,
+            save_path=torrent.save_path,
+            files=[
+                # f.name 是种子内相对路径（含子目录）
+                TorrentFile(path=f.name, size_bytes=int(f.size))
+                for f in files
+            ],
+        )
 
     async def test_connection(self) -> DownloaderInfo:
         return await asyncio.to_thread(self._test_connection_sync)

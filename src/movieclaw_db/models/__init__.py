@@ -13,6 +13,8 @@ from movieclaw_db.models.app_setting import AppSetting
 from movieclaw_db.models.base import TimestampMixin, utcnow
 from movieclaw_db.models.cache_entry import CacheEntry
 from movieclaw_db.models.downloader_client import ClientType, DownloaderClient
+from movieclaw_db.models.library import Library
+from movieclaw_db.models.library_file import FileSource, LibraryFile
 from movieclaw_db.models.llm_provider import LlmProvider
 from movieclaw_db.models.media_item import MediaItem, MediaSeason
 from movieclaw_db.models.rule_set import RuleSet
@@ -55,6 +57,9 @@ __all__ = [
     "AppSetting",
     "ClientType",
     "DownloaderClient",
+    "FileSource",
+    "Library",
+    "LibraryFile",
     "LlmProvider",
     "MediaItem",
     "MediaSeason",

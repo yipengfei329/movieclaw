@@ -12,6 +12,7 @@ const SETTINGS_RETURN_KEY = "movieclaw.settings-return";
 import { type SearchSubmitOptions } from "@/components/search-command";
 import { SettingsSidebar } from "@/components/settings-view";
 import { Sidebar } from "@/components/sidebar";
+import { SubscribeEntryProvider } from "@/components/subscribe-entry";
 import { AgentConversationsProvider } from "@/lib/agent-conversations";
 import { BackdropProvider } from "@/lib/backdrop";
 import type { SearchScope } from "@/lib/categories";
@@ -41,6 +42,7 @@ import { settingsSections } from "@/lib/mock-data";
 /** pathname → 侧栏选中项 id（找不到对应项时返回空串，侧栏无高亮） */
 function navIdFromPath(pathname: string): string {
   if (pathname === "/") return "new";
+  if (pathname.startsWith("/library")) return "library";
   if (pathname.startsWith("/subscriptions")) return "subscriptions";
   if (pathname.startsWith("/discover/movie")) return "explore-movies";
   if (pathname.startsWith("/discover/tv")) return "explore-tv";
@@ -53,12 +55,14 @@ function pathOfNavId(id: string): Route {
   switch (id) {
     case "new":
       return "/";
+    case "library":
+      return "/library" as Route;
     case "subscriptions":
       return "/subscriptions";
     case "explore-movies":
-      return "/discover/movie";
+      return "/discover/movie" as Route;
     case "explore-tv":
-      return "/discover/tv";
+      return "/discover/tv" as Route;
     default:
       return `/runs/${id}` as Route;
   }
@@ -165,6 +169,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     {/* AgentConversationsProvider：Agent 会话的全站状态（侧栏最近会话 +
       /runs/[id] 会话页共用），本地持久化运行编号并在刷新后自动回放未完成任务。 */}
     <AgentConversationsProvider>
+    {/* SubscribeEntryProvider：海报卡片「订阅影片」按钮的全站入口，
+      订阅弹层只在这里挂一份（见 components/subscribe-entry.tsx）。 */}
+    <SubscribeEntryProvider>
     {/* 全屏背景蒙版（.page-scrim）：作为 .app-shell 的兄弟节点、
       z 介于 body::before(0) 与 app-shell(10) 之间：压住背景大图、托住内容。
       全站统一一档，模糊度/暗度由「设置 → 外观 → 界面质感」的滑杆驱动
@@ -207,6 +214,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {/* —— 右区：当前路由页面 —— */}
       <main className="h-full min-w-0 flex-1">{children}</main>
     </div>
+    </SubscribeEntryProvider>
     </AgentConversationsProvider>
     </UiPrefsProvider>
     </SearchPrefsProvider>
