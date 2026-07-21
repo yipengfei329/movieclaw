@@ -42,6 +42,16 @@ class LibraryFileRepository:
         result = await self._session.execute(stmt.order_by(LibraryFile.file_path))
         return list(result.scalars().all())
 
+    async def find_by_size(self, library_id: int, size_bytes: int) -> list[LibraryFile]:
+        """同库同尺寸的台账行——改名归并的候选池（尺寸是改名/移动的不变量）。"""
+        result = await self._session.execute(
+            select(LibraryFile).where(
+                LibraryFile.library_id == library_id,
+                LibraryFile.size_bytes == size_bytes,
+            )
+        )
+        return list(result.scalars().all())
+
     async def owned_units(self, media_item_id: int) -> set[tuple[int, int]]:
         """某条目在库的期望单元集合（库存 H）——wanted 生成跳过已有的依据。
 
@@ -89,6 +99,17 @@ class LibraryFileRepository:
         await self._session.commit()
         await self._session.refresh(existing)
         return existing
+
+    async def relocate(self, file_id: int, *, file_path: str, container: str | None) -> None:
+        """改名归并：把台账行迁到新路径，身份锚与介质信息原样保留。"""
+        row = await self._session.get(LibraryFile, file_id)
+        if row is None:
+            return
+        row.file_path = file_path
+        row.container = container
+        row.missing_since = None
+        row.updated_at = utcnow()
+        await self._session.commit()
 
     async def claim_identity(
         self, file_id: int, *, media_item_id: int, season_number: int, episode_number: int

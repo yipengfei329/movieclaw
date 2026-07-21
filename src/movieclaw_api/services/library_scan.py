@@ -10,6 +10,10 @@
 
 增量语义：已在台账且在位的路径直接跳过（重扫秒级）；标记过 missing 的
 文件再次被发现时自动清除标记。扫描绝不移动/重命名/删除任何存量文件。
+
+改名归并：磁盘上被改名/移动的文件（旧路径消失 + 新路径出现）在落账前
+用"尺寸 + 时长"指纹匹配旧行，唯一命中即整行随迁——身份锚（含人工
+认领）无损延续，不产生幽灵 missing 行（见 _try_relink）。
 """
 
 from __future__ import annotations
@@ -62,6 +66,7 @@ class ScanSummary:
     scanned: int = 0  # 本轮处理的新文件数
     identified: int = 0  # 成功挂上身份锚
     unidentified: int = 0  # 落账但待识别
+    relinked: int = 0  # 改名归并：旧台账行迁到新路径（身份延续，不算新入账）
     skipped_known: int = 0  # 已在台账、直接跳过
     errors: list[str] = field(default_factory=list)
 
@@ -130,11 +135,13 @@ async def _scan(library_id: int, summary: ScanSummary) -> ScanSummary:
                     summary.errors.append(f"「{file.name}」处理失败：{exc}")
 
     logger.info(
-        "媒体库 #%s 扫描完成：新入账 %d（已识别 %d / 待识别 %d），跳过已知 %d，问题 %d",
+        "媒体库 #%s 扫描完成：新入账 %d（已识别 %d / 待识别 %d），"
+        "改名归并 %d，跳过已知 %d，问题 %d",
         library_id,
-        summary.scanned,
+        summary.scanned - summary.relinked,
         summary.identified,
         summary.unidentified,
+        summary.relinked,
         summary.skipped_known,
         len(summary.errors),
     )
@@ -218,6 +225,26 @@ async def _ingest_file(
     # 先探测：实测时长是电影同名候选消歧的强信号（原盘探测其主流文件）
     probe_target = disc_main_stream(file) if is_disc else file
     spec = await asyncio.to_thread(probe_media, probe_target) if probe_target is not None else None
+    if is_disc:
+        size_bytes = await asyncio.to_thread(_disc_total_size, file)
+        container = "bluray" if (file / "BDMV").is_dir() else "dvd"
+    else:
+        size_bytes = file.stat().st_size
+        container = file.suffix.lstrip(".").lower() or None
+
+    # 改名归并（走识别链之前）：新路径可能只是台账里某个旧文件被改了名，
+    # 归并成功即结束——身份锚（含人工认领）随行迁移，免一次 TMDB 收敛
+    if await _try_relink(
+        repo,
+        library,
+        file,
+        size_bytes=size_bytes,
+        container=container,
+        duration_seconds=spec.duration_seconds if spec else None,
+    ):
+        summary.relinked += 1
+        return
+
     item = await _identify(
         media_service,
         kind,
@@ -228,12 +255,6 @@ async def _ingest_file(
     )
     season, episode = (0, 0) if is_disc else _unit_for(kind, file)
     attrs = enrich(file.stem if not is_disc else file.name)
-    if is_disc:
-        size_bytes = await asyncio.to_thread(_disc_total_size, file)
-        container = "bluray" if (file / "BDMV").is_dir() else "dvd"
-    else:
-        size_bytes = file.stat().st_size
-        container = file.suffix.lstrip(".").lower() or None
     assert library.id is not None
     await repo.upsert_by_path(
         LibraryFile(
@@ -259,6 +280,60 @@ async def _ingest_file(
         summary.identified += 1
     else:
         summary.unidentified += 1
+
+
+# ---------------------------------------------------------------------------
+# 改名归并
+# ---------------------------------------------------------------------------
+
+# 时长互证容差：同一文件两次 ffprobe 结果应一致，留 2 秒余量防版本差异
+_RELINK_DURATION_TOLERANCE_SECONDS = 2
+
+
+async def _try_relink(
+    repo: LibraryFileRepository,
+    library: Library,
+    file: Path,
+    *,
+    size_bytes: int,
+    container: str | None,
+    duration_seconds: int | None,
+) -> bool:
+    """新路径落账前，先找"已消失的同尺寸旧行"迁移过来（磁盘改名检测）。
+
+    磁盘上的改名/移动对台账来说是"旧路径消失 + 新路径出现"两个独立事件，
+    直接当新文件落账会丢掉旧行的身份锚（尤其是人工认领的成果），旧行则
+    沦为永久 missing 的幽灵行。这里用改名的不变量做指纹：
+
+    - 候选：同库、尺寸精确相等、且已标记 missing 或路径已不在磁盘
+      （后者覆盖 watchdog 实时触发、6 小时对账还没跑的窗口期）；
+      路径仍在磁盘的同尺寸行是复制/硬链，不是改名，不参与；
+    - 互证：新旧双方都有实测时长时必须一致（±2 秒），一方缺失只凭尺寸；
+    - **唯一命中才归并**——多个候选宁可当新文件走识别链，不静默错挂。
+    """
+    assert library.id is not None
+    path_str = str(file)
+    candidates = []
+    for row in await repo.find_by_size(library.id, size_bytes):
+        if row.file_path == path_str:
+            continue
+        if row.missing_since is None and await asyncio.to_thread(Path(row.file_path).exists):
+            continue
+        if (
+            duration_seconds
+            and row.duration_seconds
+            and abs(duration_seconds - row.duration_seconds) > _RELINK_DURATION_TOLERANCE_SECONDS
+        ):
+            continue
+        candidates.append(row)
+    if len(candidates) != 1:
+        return False
+    old = candidates[0]
+    assert old.id is not None
+    old_path = old.file_path
+    await repo.relocate(old.id, file_path=path_str, container=container)
+    logger.info("检测到文件改名，台账已随迁（身份保留）：%s → %s", old_path, path_str)
+    return True
 
 
 # ---------------------------------------------------------------------------
