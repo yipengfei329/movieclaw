@@ -61,6 +61,7 @@ def _tv_detail(
     seasons: int | None = None,
     episode_counts: dict[int, int] | None = None,
     alts: list[str] = [],
+    animation: bool = False,
 ) -> dict:
     return {
         "id": tmdb_id,
@@ -69,6 +70,7 @@ def _tv_detail(
             {"season_number": n, "episode_count": c} for n, c in (episode_counts or {}).items()
         ],
         "alternative_titles": {"results": [{"title": t} for t in alts]},
+        "genres": [{"id": 16, "name": "动画"}] if animation else [],
     }
 
 
@@ -159,6 +161,38 @@ async def test_tv_season_count_discriminates_same_title() -> None:
         client, MediaKind.TV, LocalEvidence(title="Shark Tank", season=14, episode=4)
     )
     assert picked == 30703
+
+
+async def test_tv_anime_merged_season_exempt() -> None:
+    """租借女友 S05：TMDB 把日漫多期合并为 1 季连续编号，动画候选豁免
+    季数反证（2026-07 批测暴露的系统性误杀）。"""
+    client = _client(
+        {
+            "/3/search/tv": {"results": [_tv(96316, "租借女友", "彼女、お借りします", 2020)]},
+            "/3/tv/96316": _tv_detail(96316, seasons=1, animation=True),
+        }
+    )
+    picked = await verify_resolve(
+        client, MediaKind.TV, LocalEvidence(title="租借女友", season=5)
+    )
+    assert picked == 96316
+
+
+async def test_tv_anime_exempt_denied_on_year_gap() -> None:
+    """Berserk 2016 类回归：动画豁免不放过"错代同名老条目"——本地年份
+    与候选首播年间隔远超 本地季号×2 时，季数反证照常淘汰。"""
+    client = _client(
+        {
+            "/3/search/tv": {
+                "results": [_tv(409, "剑风传奇", "剣風伝奇ベルセルク", 1997)]
+            },
+            "/3/tv/409": _tv_detail(409, seasons=1, alts=["Berserk"], animation=True),
+        }
+    )
+    picked = await verify_resolve(
+        client, MediaKind.TV, LocalEvidence(title="Berserk", year=2016, season=2)
+    )
+    assert picked is None
 
 
 async def test_tv_alt_title_gate_with_year_pick() -> None:

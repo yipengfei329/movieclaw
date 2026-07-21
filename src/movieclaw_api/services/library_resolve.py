@@ -19,6 +19,12 @@
        佐证；不吻合不淘汰——导演剪辑版/加长版的偏差是正常的。
      - 季数（剧集）：本地看到 SNN 而候选总季数 < NN 视为**反证**淘汰
        （衍生/花絮条目通常死在这一刀）；≥ NN 则是佐证。
+       **动画豁免**：TMDB 对日漫/国产年番普遍把多期合并为单季连续编号
+       （实测：《租借女友》5 期在 TMDB 是 1 季 60 集、《斗罗大陆Ⅱ》是
+       1 季 182 集在播），PT 站的 SNN 惯例与之系统性冲突——动画类候选
+       且年份间隔合理（本地年份 − 候选首播年 ≤ 本地季号×2）时季数不作
+       反证。年份间隔这一刀挡住"错代同名老条目"（Berserk 2016 种子不会
+       因豁免错挂 1997 版：间隔 19 年远超 S02×2）。
      - 集数（剧集）：对应季的集数 ≥ 本地集号作佐证；不足不淘汰——TMDB 对
        在播季的集数经常滞后。
      - 副标题（经下载器落地的文件才有，见 download_hint 表）：其中的中文
@@ -96,6 +102,7 @@ class _Candidate:
     runtime_seconds: int | None = None
     season_count: int | None = None
     episode_counts: dict[int, int] = field(default_factory=dict)  # 季号 → 集数
+    is_animation: bool = False  # 动画类（TMDB genre 16）：季数反证豁免用
 
 
 async def verify_resolve(
@@ -302,9 +309,25 @@ def _counter_evidence(kind: MediaKind, evidence: LocalEvidence, c: _Candidate) -
         and evidence.season
         and c.season_count is not None
         and c.season_count < evidence.season
+        and not _anime_season_exempt(evidence, c)
     ):
         return f"季数反证（本地 S{evidence.season:02d} vs 候选共 {c.season_count} 季）"
     return None
+
+
+def _anime_season_exempt(evidence: LocalEvidence, c: _Candidate) -> bool:
+    """动画类候选的季数反证豁免（见模块头注释「动画豁免」）。
+
+    豁免条件：候选是动画，且年份不构成"错代"矛盾——本地或候选缺年份时
+    放行；两边都有年份时要求 0 ≤ 本地年份 − 候选首播年 ≤ 本地季号×2
+    （连续年番第 N 季大约在首播后 N 年内播出，远超此间隔的是同名老条目）。
+    """
+    if not c.is_animation:
+        return False
+    if evidence.year is None or c.year is None:
+        return True
+    assert evidence.season is not None
+    return 0 <= evidence.year - c.year <= evidence.season * 2
 
 
 def _corroborations(kind: MediaKind, evidence: LocalEvidence, c: _Candidate) -> list[str]:
@@ -413,6 +436,10 @@ async def _load_detail(
         seasons = detail.get("number_of_seasons")
         if seasons:
             candidate.season_count = int(seasons)
+        # genre 16 = Animation（id 跨语言稳定，名称会随 language 变化）
+        candidate.is_animation = any(
+            g.get("id") == 16 for g in detail.get("genres") or []
+        )
         for season in detail.get("seasons") or []:
             number, count = season.get("season_number"), season.get("episode_count")
             if number and count:
