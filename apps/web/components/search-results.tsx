@@ -1705,7 +1705,12 @@ function DownloadButton({ hit, className }: { hit: TorrentHit; className: string
         site_id: hit.site_id,
         download_url: hit.download_url,
         ...(library && title
-          ? { library_id: library.id, title, year: attrs?.year ?? null }
+          ? {
+              library_id: library.id,
+              title,
+              year: attrs?.year ?? null,
+              subtitle: hit.subtitle || null,
+            }
           : {}),
       });
       setState(result.already_exists ? "exists" : "done");

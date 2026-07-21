@@ -26,6 +26,8 @@ export interface LibraryStats {
   total_size_bytes: number;
   /** 待识别文件数 */
   unidentified_count: number;
+  /** 标记 missing 的文件数（缺失清单入口） */
+  missing_count: number;
 }
 
 export interface MediaLibrary {
@@ -42,8 +44,28 @@ export interface MediaLibrary {
   stats: LibraryStats;
   /** 是否正在扫描 */
   scanning: boolean;
+  /** 扫描实时进度（没在扫为 null）——前端在库封面上画进度环 */
+  scan_progress: ScanProgress | null;
+  /** 最近一次扫描结论（扫描常毫秒级完成，靠它给"点了有反应"的反馈） */
+  last_scan: LastScan | null;
   created_at: string;
   updated_at: string;
+}
+
+/** 扫描实时进度。 */
+export interface ScanProgress {
+  processed: number;
+  total: number;
+}
+
+/** 最近一次扫描的结论。 */
+export interface LastScan {
+  finished_at: string;
+  scanned: number;
+  identified: number;
+  unidentified: number;
+  marked_missing: number;
+  errors: string[];
 }
 
 /** 库内一个媒体条目的库存聚合（单库海报墙的一格）。 */
@@ -64,6 +86,8 @@ export interface LibraryItem {
   resolutions: string[];
   /** 标记 missing 的文件数（>0 时提示） */
   missing_count: number;
+  /** 最近一次文件入账时间（ISO 字符串），首页「最近添加」排序依据 */
+  added_at: string | null;
 }
 
 /** 待识别清单的一行。 */
@@ -179,5 +203,71 @@ export function ignoreFile(fileId: number): Promise<Record<string, never>> {
     request<ApiEnvelope<Record<string, never>>>(`/libraries/files/${fileId}`, {
       method: "DELETE",
     }),
+  );
+}
+
+/** 批量忽略整库的待识别文件（只删台账，不动磁盘）。 */
+export function clearUnidentified(libraryId: number): Promise<{ cleared: number }> {
+  return unwrap(
+    request<ApiEnvelope<{ cleared: number }>>(`/libraries/unidentified/clear`, {
+      method: "POST",
+      body: JSON.stringify({ library_id: libraryId }),
+    }),
+  );
+}
+
+/** 缺失清单里的一个文件。 */
+export interface MissingFile {
+  id: number;
+  file_path: string;
+  season_number: number;
+  episode_number: number;
+  size_bytes: number;
+}
+
+/** 缺失清单的一行：按媒体条目聚合。 */
+export interface MissingItem {
+  media_item_id: number;
+  kind: MediaType;
+  tmdb_id: number;
+  title: string;
+  year: number | null;
+  poster_url: string | null;
+  /** 该条目已有订阅时给出——清理前提示（订阅可能重新下回来） */
+  subscription_id: number | null;
+  files: MissingFile[];
+}
+
+/** 缺失清单（文件已不在磁盘的库存，按条目聚合）。 */
+export function listMissing(libraryId: number): Promise<MissingItem[]> {
+  return unwrap(request<ApiEnvelope<MissingItem[]>>(`/libraries/${libraryId}/missing`));
+}
+
+/** 清理缺失记录（只删台账，绝不动磁盘）；不传 mediaItemId 清整库。 */
+export function clearMissing(
+  libraryId: number,
+  mediaItemId?: number,
+): Promise<{ cleared: number }> {
+  return unwrap(
+    request<ApiEnvelope<{ cleared: number }>>(`/libraries/missing/clear`, {
+      method: "POST",
+      body: JSON.stringify({ library_id: libraryId, media_item_id: mediaItemId ?? null }),
+    }),
+  );
+}
+
+/** 重新下载：缺失单元交回订阅管线（无订阅则按缺失季自动创建）。 */
+export function redownloadMissing(
+  libraryId: number,
+  mediaItemId: number,
+): Promise<{ subscription_id: number; requeued: number }> {
+  return unwrap(
+    request<ApiEnvelope<{ subscription_id: number; requeued: number }>>(
+      `/libraries/missing/redownload`,
+      {
+        method: "POST",
+        body: JSON.stringify({ library_id: libraryId, media_item_id: mediaItemId }),
+      },
+    ),
   );
 }

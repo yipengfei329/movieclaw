@@ -48,3 +48,20 @@ def _load_env_file(path: Path) -> None:
 
 
 _load_env_file(_ENV_FILE)
+
+
+import pytest  # noqa: E402  须在环境变量装配之后导入
+
+
+@pytest.fixture(autouse=True)
+def _mute_instant_search_kick(monkeypatch):
+    """默认打桩订阅写操作触发的即时缺口搜索（fire-and-forget）。
+
+    service 层收口后，创建/调整/恢复/缺失重下都会踢一次 search_wanted；
+    单测环境没有可用站点，放任它跑会写入"搜索失败"活动、污染断言。
+    需要验证搜索行为的测试请显式 ``await search_wanted()``（管线测试即如此）；
+    需要验证"踢了没踢"的测试可再次 monkeypatch 覆盖本桩。
+    """
+    monkeypatch.setattr(
+        "movieclaw_api.services.wanted_search.kick_search_soon", lambda: None
+    )

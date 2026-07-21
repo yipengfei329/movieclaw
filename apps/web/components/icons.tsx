@@ -272,6 +272,12 @@ export const ServerIcon = (p: IconProps) => (
   </Base>
 );
 
+export const FolderIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M3 7a2 2 0 0 1 2-2h4l2.2 2.5H19a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+  </Base>
+);
+
 export const DownloadIcon = (p: IconProps) => (
   <Base {...p}>
     <path d="M12 4v11" />

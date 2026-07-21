@@ -15,10 +15,7 @@ from sqlmodel import select
 import movieclaw_api.services.library_scan as scan_mod
 import movieclaw_api.services.media_discover as discover_mod
 from movieclaw_api.core.config import get_settings
-from movieclaw_api.services.library_scan import (
-    _reconcile_missing,
-    scan_library,
-)
+from movieclaw_api.services.library_scan import scan_library
 from movieclaw_api.services.media_library import MediaLibraryService
 from movieclaw_api.services.subscription import SubscriptionService
 from movieclaw_db.engine import dispose_db, get_database, init_db
@@ -197,6 +194,44 @@ async def test_owned_units_skip_wanted_and_show_in_prepare(db, tmp_path) -> None
         assert {(w.season_number, w.episode_number) for w in rows} == {(1, 3)}
 
 
+async def test_scan_progress_observable_and_cleared(db, tmp_path, monkeypatch) -> None:
+    """扫描进行中能轮询到 (已处理, 总数)，结束后进度清空——前端进度环的数据源。"""
+    import asyncio
+
+    import movieclaw_api.services.library_scan as scan_mod
+    from movieclaw_api.services.library_scan import scan_progress
+
+    root = _make_tv_library(tmp_path)
+    async with db.session() as session:
+        library = await LibraryRepository(session).create(
+            name="剧集库", kind="tv", root_paths=[str(root)]
+        )
+
+    # 给每个文件的探测加一点耗时，让"进行中"窗口足够被采样到
+    original_probe = scan_mod.probe_media
+
+    def slow_probe(path):
+        import time
+
+        time.sleep(0.05)
+        return original_probe(path)
+
+    monkeypatch.setattr(scan_mod, "probe_media", slow_probe)
+
+    task = asyncio.create_task(scan_library(library.id))
+    sampled: list[tuple[int, int]] = []
+    while not task.done():
+        progress = scan_progress(library.id)
+        if progress is not None:
+            sampled.append(progress)
+        await asyncio.sleep(0.01)
+    await task
+
+    assert sampled, "扫描期间必须能采样到进度"
+    assert sampled[-1][1] == 3  # 总数 = 两集 + junk
+    assert scan_progress(library.id) is None  # 结束后清空
+
+
 async def test_reconcile_marks_missing_and_rescan_restores(db, tmp_path) -> None:
     root = _make_tv_library(tmp_path)
     async with db.session() as session:
@@ -208,7 +243,14 @@ async def test_reconcile_marks_missing_and_rescan_restores(db, tmp_path) -> None
     victim = root / "测试剧集 (2024)" / "Season 01" / "测试剧集.S01E01.1080p.mkv"
     payload = victim.read_bytes()
     victim.unlink()
-    await _reconcile_missing(library.id)
+    # 删除感知已并入扫描本身：重扫即标记 missing（无需独立对账步骤）
+    summary = await scan_library(library.id)
+    assert summary.marked_missing == 1
+    # 最近扫描结论要留档（前端"点了有反应"的反馈数据源）
+    from movieclaw_api.services.library_scan import last_scan
+
+    record = last_scan(library.id)
+    assert record is not None and record[1].marked_missing == 1
 
     async with db.session() as session:
         row = (

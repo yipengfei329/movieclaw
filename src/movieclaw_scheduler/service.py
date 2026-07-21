@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -63,7 +63,17 @@ class SchedulerService:
         if row.trigger_type == TriggerType.INTERVAL:
             if not row.interval_seconds or row.interval_seconds <= 0:
                 raise ValueError(f"任务 {row.task_key} 的间隔秒数无效：{row.interval_seconds}")
-            return IntervalTrigger(seconds=row.interval_seconds, timezone=self._tz)
+            # 重启不清零节奏：以「上次实际执行 + 间隔」为序列起点，而非「启动
+            # 时刻 + 间隔」。否则进程频繁重启（如开发环境热重载）会把下次触发
+            # 无限顺延，任务被饿死；续排后等待上限恒为一个间隔。
+            start_date = None
+            if row.last_run_at is not None:
+                start_date = row.last_run_at.replace(tzinfo=UTC) + timedelta(
+                    seconds=row.interval_seconds
+                )
+            return IntervalTrigger(
+                seconds=row.interval_seconds, timezone=self._tz, start_date=start_date
+            )
         if row.trigger_type == TriggerType.CRON:
             if not row.cron_expr:
                 raise ValueError(f"任务 {row.task_key} 缺少 cron 表达式")

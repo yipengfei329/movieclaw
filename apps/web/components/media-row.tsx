@@ -5,7 +5,7 @@ import type { Route } from "next";
 import Link from "next/link";
 
 import { ChevronLeftIcon, ChevronRightIcon } from "@/components/icons";
-import { PosterCard } from "@/components/poster-card";
+import { PosterCard, type PosterCardAction } from "@/components/poster-card";
 import type { MediaRowData } from "@/lib/media-types";
 
 /**
@@ -17,7 +17,18 @@ import type { MediaRowData } from "@/lib/media-types";
  *   - 到达边缘时对应方向的按钮隐藏（用 onScroll 实时追踪滚动位置）。
  *   - ranked 行（Top 10）的卡片更宽，为左侧描边大数字留出空间。
  */
-export function MediaRow({ row, moreHref }: { row: MediaRowData; moreHref?: Route }) {
+export function MediaRow({
+  row,
+  moreHref,
+  moreLabel = "查看完整榜单",
+  cardAction,
+}: {
+  row: MediaRowData;
+  moreHref?: Route;
+  moreLabel?: string;
+  /** 卡片悬浮操作区变体（媒体库场景传 "owned"），缺省为「订阅影片」 */
+  cardAction?: PosterCardAction;
+}) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [canLeft, setCanLeft] = useState(false);
   const [canRight, setCanRight] = useState(false);
@@ -53,7 +64,7 @@ export function MediaRow({ row, moreHref }: { row: MediaRowData; moreHref?: Rout
             href={moreHref}
             className="shrink-0 text-xs font-semibold text-[var(--text-muted)] transition hover:text-[var(--text)]"
           >
-            查看完整榜单
+            {moreLabel}
           </Link>
         )}
       </div>
@@ -72,7 +83,7 @@ export function MediaRow({ row, moreHref }: { row: MediaRowData; moreHref?: Rout
                 row.ranked ? "w-[188px]" : "w-[152px] xl:w-[164px]"
               }`}
             >
-              <PosterCard item={item} rank={row.ranked ? i + 1 : undefined} />
+              <PosterCard item={item} rank={row.ranked ? i + 1 : undefined} action={cardAction} />
             </div>
           ))}
         </div>

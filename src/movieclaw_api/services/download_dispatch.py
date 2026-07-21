@@ -207,6 +207,9 @@ async def _submit_real(session: AsyncSession, candidate: TorrentCandidate):
         site_id=candidate.site_id,
         download_url=candidate.download_url,
         tags=["movieclaw-sub"],
+        # 订阅路径身份在投递时已锚定、又不传 save_path，当前不会落线索；
+        # 带上副标题是为将来直投库目录时识别信号不断档
+        subtitle=candidate.subtitle,
     )
     return result
 

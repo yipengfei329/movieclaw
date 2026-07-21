@@ -1,16 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { Route } from "next";
 import Link from "next/link";
 import { createPortal } from "react-dom";
 
-import { FilmIcon, MoreIcon, PlusIcon, TvIcon } from "@/components/icons";
+import { DirectoryPicker } from "@/components/directory-picker";
+import { FilmIcon, FolderIcon, MoreIcon, PlusIcon, TvIcon, XIcon } from "@/components/icons";
+import { MediaRow } from "@/components/media-row";
+import { Tooltip } from "@/components/tooltip";
 import {
   type LibraryItem,
   type LibraryPayload,
   type MediaLibrary,
+  type ScanProgress,
   createLibrary,
   deleteLibrary,
   listLibraries,
@@ -22,7 +26,7 @@ import {
 import type { Subscription } from "@/lib/api/subscriptions";
 import { formatBytes } from "@/lib/format";
 import { cachedImageUrl } from "@/lib/image-proxy";
-import type { MediaType } from "@/lib/media-types";
+import type { MediaItem, MediaType } from "@/lib/media-types";
 
 /** 库类型 → 展示名与图标 */
 export const LIBRARY_KIND_META: Record<MediaType, { label: string; Icon: typeof FilmIcon }> = {
@@ -45,8 +49,8 @@ export function effectiveLibraryId(
 /**
  * 媒体库页（/library）：全部库的 Emby 风格卡片墙。
  *
- * 每张卡是一个库：封面用库内作品的海报拼图（最多 4 张，参考 moviebot 的
- * 库封面合成，但在前端用 CSS 拼、零后端开销），叠库名/类型/统计；
+ * 每张卡是一个库：封面用库内作品的海报做「货架」展示（最多 4 张站立海报
+ * 带底部倒影，纯前端 CSS 合成、零后端开销），叠库名/类型/统计；
  * 点击进入单库海报墙（/library/[id]）。库的增删改/设默认/扫描都在本页
  * 完成——媒体库是内容的一等入口，不是配置项。
  *
@@ -90,6 +94,21 @@ export function LibraryView() {
     const timer = setInterval(reload, 3000);
     return () => clearInterval(timer);
   }, [scanningAny, reload]);
+
+  // 每个非空库一行「最近添加」：按最近入账时间倒序取前 20，
+  // 复用发现页的横滚海报行（点击进详情、悬浮可订阅），把首页铺满
+  const recentRows = useMemo(
+    () =>
+      (libraries ?? [])
+        .map((library) => {
+          const items = [...(itemsByLibrary.get(library.id) ?? [])]
+            .sort((a, b) => (b.added_at ?? "").localeCompare(a.added_at ?? ""))
+            .slice(0, 20);
+          return { library, items: items.map(libraryItemToMediaItem) };
+        })
+        .filter((row) => row.items.length > 0),
+    [libraries, itemsByLibrary],
+  );
 
   return (
     <div className="scroll-thin flex-1 overflow-y-auto pb-10">
@@ -139,7 +158,7 @@ export function LibraryView() {
       )}
 
       {libraries !== null && !failed && (
-        <div className="mt-6 grid gap-5 px-6 [grid-template-columns:repeat(auto-fill,minmax(320px,1fr))]">
+        <div className="mt-6 grid gap-5 px-6 [grid-template-columns:repeat(auto-fill,minmax(230px,280px))]">
           {libraries.map((library) => (
             <LibraryCard
               key={library.id}
@@ -148,6 +167,25 @@ export function LibraryView() {
               onEdit={() => setEditing(library)}
               onRefresh={reload}
               onError={setError}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* —— 最近添加：Emby 首页式分区，每个非空库一行横滚海报 —— */}
+      {recentRows.length > 0 && (
+        <div className="mt-10 space-y-8">
+          {recentRows.map(({ library, items }) => (
+            <MediaRow
+              key={library.id}
+              row={{
+                id: `library-recent-${library.id}`,
+                title: `最近添加的${library.name}`,
+                items,
+              }}
+              moreHref={`/library/${library.id}` as Route}
+              moreLabel="查看全部"
+              cardAction="owned"
             />
           ))}
         </div>
@@ -165,7 +203,37 @@ export function LibraryView() {
   );
 }
 
-/* —— 库卡片：海报拼图封面 + 库名/徽标/计数，Emby「我的媒体」磁贴风 —— */
+/**
+ * 库存条目 → 发现页海报卡的数据形态。点击走 /media/{type}/{tmdb_id} 详情
+ * （与单库页库存格同一目标）；徽章位放最高清晰度，副行放规模/大小。
+ */
+function libraryItemToMediaItem(item: LibraryItem): MediaItem {
+  let extent = "";
+  if (item.kind === "tv" && item.episode_count > 0) {
+    extent =
+      item.seasons.length === 1
+        ? `第 ${item.seasons[0]} 季 · ${item.episode_count} 集`
+        : `${item.seasons.length} 季 · ${item.episode_count} 集`;
+  } else if (item.kind === "movie" && item.total_size_bytes > 0) {
+    extent = formatBytes(item.total_size_bytes);
+  }
+  return {
+    id: String(item.tmdb_id),
+    source: "tmdb",
+    type: item.kind,
+    title: item.title,
+    originalTitle: "",
+    year: item.year ?? 0,
+    rating: 0,
+    genres: [],
+    extent,
+    badges: item.resolutions.slice(0, 1),
+    overview: "",
+    posterUrl: item.poster_url ? cachedImageUrl(item.poster_url) : "",
+  };
+}
+
+/* —— 库卡片：海报货架封面 + 库名/徽标/计数，Emby「我的媒体」磁贴风 —— */
 
 function LibraryCard({
   library,
@@ -181,7 +249,9 @@ function LibraryCard({
   onError: (message: string) => void;
 }) {
   const meta = LIBRARY_KIND_META[library.kind];
-  const posters = items
+  // 封面海报取最近入库的 4 部（与下方「最近添加」行同一排序口径）
+  const posters = [...items]
+    .sort((a, b) => (b.added_at ?? "").localeCompare(a.added_at ?? ""))
     .map((s) => s.poster_url)
     .filter((u): u is string => Boolean(u))
     .slice(0, 4);
@@ -198,41 +268,45 @@ function LibraryCard({
         aria-label={`打开「${library.name}」`}
         className="block overflow-hidden rounded-2xl ring-1 ring-white/10 outline-none transition duration-300 hover:ring-white/35 focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
       >
-        <div className="relative aspect-[16/9] bg-[#141824]">
+        <div className="relative aspect-[21/10] bg-[#0a0c12]">
           <LibraryCover posters={posters} Icon={meta.Icon} />
-          {/* 底部渐变压暗，托住文字（Emby 磁贴同款处理） */}
-          <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-black/10 transition group-hover/lib:via-black/35" />
-
-          <div className="absolute inset-x-0 bottom-0 p-4">
-            <div className="flex items-center gap-2">
-              <span className="icon-chip flex size-7 shrink-0 items-center justify-center !rounded-lg">
-                <meta.Icon className="size-4" />
-              </span>
-              <h3 className="truncate text-[17px] font-bold text-white">{library.name}</h3>
-              {library.is_default && (
-                <span className="shrink-0 rounded-full border border-white/[0.14] bg-white/[0.14] px-2 py-0.5 text-[10.5px] font-semibold text-white/90 backdrop-blur-sm">
-                  默认
-                </span>
-              )}
-              {library.scanning && (
-                <span className="flex shrink-0 items-center gap-1.5 rounded-full border border-white/[0.14] bg-black/40 px-2 py-0.5 text-[10.5px] font-semibold text-white/90 backdrop-blur-sm">
-                  <span className="size-2.5 animate-spin rounded-full border border-white/30 border-t-white/90" />
-                  扫描中
-                </span>
-              )}
-              {stats.unidentified_count > 0 && (
-                <span className="shrink-0 rounded-full border border-[#f5c451]/40 bg-[#f5c451]/15 px-2 py-0.5 text-[10.5px] font-semibold text-[#f5c451] backdrop-blur-sm">
-                  {stats.unidentified_count} 个待识别
-                </span>
-              )}
+          {library.scanning && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/55 backdrop-blur-[2px]">
+              <ScanProgressRing progress={library.scan_progress} />
             </div>
-            <p className="mt-1 truncate pl-9 text-[11.5px] text-white/60" title={library.primary_root ?? undefined}>
-              {meta.label} · {summary}
-              {library.primary_root ? ` · ${library.primary_root}` : ""}
-            </p>
-          </div>
+          )}
         </div>
       </Link>
+
+      {/* 库名/徽标/统计：Emby 式放在封面下方居中，不再叠在海报上 */}
+      <div className="mt-2.5 px-2">
+        <div className="flex items-center justify-center gap-2">
+          <h3 className="truncate text-[15px] font-semibold text-white">{library.name}</h3>
+          {library.is_default && (
+            <span className="shrink-0 rounded-full border border-white/[0.14] bg-white/[0.1] px-2 py-0.5 text-[10.5px] font-semibold text-white/80">
+              默认
+            </span>
+          )}
+          {library.scanning && (
+            <span className="flex shrink-0 items-center gap-1.5 rounded-full border border-white/[0.14] bg-white/[0.06] px-2 py-0.5 text-[10.5px] font-semibold text-white/80">
+              <span className="size-2.5 animate-spin rounded-full border border-white/30 border-t-white/90" />
+              扫描中
+            </span>
+          )}
+          {stats.unidentified_count > 0 && (
+            <span className="shrink-0 rounded-full border border-[#f5c451]/40 bg-[#f5c451]/15 px-2 py-0.5 text-[10.5px] font-semibold text-[#f5c451]">
+              {stats.unidentified_count} 个待识别
+            </span>
+          )}
+        </div>
+        <p
+          className="mt-1 truncate text-center text-[11.5px] text-white/50"
+          title={library.primary_root ?? undefined}
+        >
+          {meta.label} · {summary}
+          {library.primary_root ? ` · ${library.primary_root}` : ""}
+        </p>
+      </div>
 
       {/* 管理操作：悬停浮现在右上角（Link 外层，避免点菜单触发跳转） */}
       <LibraryCardMenu
@@ -250,7 +324,46 @@ function LibraryCard({
   );
 }
 
-/** 封面拼图：4 张=2×2 网格；1-3 张=首图铺满；0 张=类型图标底纹。 */
+/**
+ * 封面「氛围光货架」：首张海报重模糊后铺满做氛围光晕（每个库有自己的
+ * 色调），最多 4 张海报立体站排，底部倒影直接落在氛围暗底上表达
+ * 「反光地面」；0 张=类型图标底纹。卡片 21/10 比例，海报占约 2/3。
+ */
+/** 扫描进度环：有分母画百分比，刚起步（进度未知）转圈占位。 */
+function ScanProgressRing({ progress }: { progress: ScanProgress | null }) {
+  const pct =
+    progress && progress.total > 0
+      ? Math.min(100, Math.round((progress.processed / progress.total) * 100))
+      : null;
+  const R = 26;
+  const C = 2 * Math.PI * R;
+  return (
+    <div className="relative size-[72px]">
+      <svg
+        viewBox="0 0 64 64"
+        className={`size-full -rotate-90 ${pct === null ? "animate-spin" : ""}`}
+      >
+        <circle cx="32" cy="32" r={R} fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="5" />
+        <circle
+          cx="32"
+          cy="32"
+          r={R}
+          fill="none"
+          stroke="white"
+          strokeWidth="5"
+          strokeLinecap="round"
+          strokeDasharray={C}
+          strokeDashoffset={pct === null ? C * 0.75 : C * (1 - pct / 100)}
+          className="transition-[stroke-dashoffset] duration-500 ease-out"
+        />
+      </svg>
+      <span className="absolute inset-0 flex items-center justify-center text-[13px] font-semibold text-white">
+        {pct === null ? "…" : `${pct}%`}
+      </span>
+    </div>
+  );
+}
+
 function LibraryCover({ posters, Icon }: { posters: string[]; Icon: typeof FilmIcon }) {
   if (posters.length === 0) {
     return (
@@ -259,29 +372,59 @@ function LibraryCover({ posters, Icon }: { posters: string[]; Icon: typeof FilmI
       </div>
     );
   }
-  if (posters.length < 4) {
-    return (
+  return (
+    <div className="absolute inset-0 overflow-hidden">
+      {/* 氛围光：首图放大重模糊 + 提饱和，再整体压暗保证前景对比度 */}
       <img
         src={cachedImageUrl(posters[0])}
         alt=""
         loading="lazy"
         referrerPolicy="no-referrer"
-        className="absolute inset-0 size-full scale-105 object-cover object-[center_20%] blur-[1px]"
+        className="absolute inset-0 size-full scale-150 object-cover opacity-70 blur-3xl saturate-150"
       />
-    );
-  }
-  return (
-    <div className="absolute inset-0 grid grid-cols-4">
-      {posters.map((url, i) => (
-        <img
-          key={i}
-          src={cachedImageUrl(url)}
-          alt=""
-          loading="lazy"
-          referrerPolicy="no-referrer"
-          className="size-full object-cover"
-        />
-      ))}
+      <div className="absolute inset-0 bg-[#080a10]/50" />
+      {/* 灯箱底光：首图模糊后以 screen 混合从底边向上发光，颜色天然
+          取自海报主色；再叠一个中性地面光斑，像射灯打在舞台地面上 */}
+      <img
+        src={cachedImageUrl(posters[0])}
+        alt=""
+        aria-hidden
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        className="absolute inset-x-0 bottom-0 h-1/2 w-full object-cover opacity-55 blur-3xl saturate-150 mix-blend-screen [mask-image:linear-gradient(to_top,black,transparent)]"
+      />
+      <div className="absolute inset-x-[8%] bottom-0 h-[28%] [background:radial-gradient(60%_100%_at_50%_100%,rgba(255,255,255,0.09),transparent_70%)]" />
+      {/* 海报排：立在玻璃搁板上，悬停整排轻微上浮 */}
+      <div className="absolute inset-x-0 top-[4.5%] flex justify-center gap-[2%] px-[2%]">
+        {posters.map((url, i) => (
+          <div
+            key={i}
+            className="w-[22.5%] shrink-0 transition duration-300 group-hover/lib:-translate-y-1"
+          >
+            <img
+              src={cachedImageUrl(url)}
+              alt=""
+              loading="lazy"
+              referrerPolicy="no-referrer"
+              className="aspect-[2/3] w-full rounded-[4px] object-cover shadow-[0_6px_18px_rgba(0,0,0,0.5)] ring-1 ring-white/20"
+            />
+            {/* 倒影：翻转副本贴着底边，向下快速渐隐。注意 mask 在元素本地
+                坐标系生效、会跟着 scaleY(-1) 一起翻转，所以这里写 to top，
+                翻转后在屏幕上才是「贴近海报处最实、向下淡出」 */}
+            <img
+              src={cachedImageUrl(url)}
+              alt=""
+              aria-hidden
+              loading="lazy"
+              referrerPolicy="no-referrer"
+              className="mt-[2px] aspect-[2/3] w-full -scale-y-100 rounded-[4px] object-cover opacity-55 blur-[1px] [mask-image:linear-gradient(to_top,rgba(0,0,0,0.7),transparent_26%)]"
+            />
+          </div>
+        ))}
+      </div>
+      {/* 悬停扫光：一道斜向柔光从左扫到右掠过倒影区（transform 过渡
+          实现单次扫过，移出卡片后自动滑回原位待命） */}
+      <div className="pointer-events-none absolute -left-[45%] bottom-0 h-[25%] w-[45%] -skew-x-12 bg-gradient-to-r from-transparent via-white/[0.14] to-transparent transition-transform duration-700 ease-out group-hover/lib:translate-x-[350%]" />
     </div>
   );
 }
@@ -420,8 +563,10 @@ export function LibraryFormDialog({
   const [error, setError] = useState<string | null>(null);
   const [kind, setKind] = useState<MediaType>("movie");
   const [name, setName] = useState("");
-  // 根路径用多行文本编辑：每行一个绝对路径，第一行为主根
-  const [rootsText, setRootsText] = useState("");
+  // 根路径列表：第一项为主根；通过目录选择器逐个添加
+  const [roots, setRoots] = useState<string[]>([]);
+  // 选择器目标："add"=追加新根；数字=更改该下标的既有根（原位替换）；null=关闭
+  const [pickerTarget, setPickerTarget] = useState<"add" | number | null>(null);
 
   // 每次打开时按目标重置表单（编辑带入现值，新增清空）
   useEffect(() => {
@@ -429,7 +574,8 @@ export function LibraryFormDialog({
     setError(null);
     setKind(library?.kind ?? "movie");
     setName(library?.name ?? "");
-    setRootsText(library?.root_paths.join("\n") ?? "");
+    setRoots(library?.root_paths ?? []);
+    setPickerTarget(null);
   }, [state, library]);
 
   useEffect(() => {
@@ -441,10 +587,6 @@ export function LibraryFormDialog({
 
   if (state === null) return null;
 
-  const roots = rootsText
-    .split("\n")
-    .map((s) => s.trim())
-    .filter(Boolean);
   const canSubmit = !busy && name.trim().length > 0 && roots.length > 0;
 
   const submit = () => {
@@ -524,17 +666,80 @@ export function LibraryFormDialog({
           </div>
 
           <div>
-            <label className={labelClass}>根路径（每行一个，第一行为主根）</label>
-            <textarea
-              value={rootsText}
-              onChange={(e) => setRootsText(e.target.value)}
-              rows={3}
-              placeholder={"/vol1/media/movies\n/vol2/media/movies（扩展根，可选）"}
-              className={`${inputClass} resize-y font-mono`}
-            />
+            <label className={labelClass}>根路径（第一个为主根）</label>
+            <div className="space-y-1.5">
+              {roots.map((root, i) => (
+                <div
+                  key={root}
+                  className="group flex items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2"
+                >
+                  <FolderIcon className="size-4 shrink-0 text-[var(--accent)]/80" />
+                  {/* 保尾截断（dir=rtl）：路径的区分信息在尾部，省略号出现在头部；
+                      LRM 标记防止首尾的 "/" 在 RTL 下跳位。点击可原位更改目录 */}
+                  <Tooltip
+                    content={
+                      <>
+                        <p className="mb-1 break-all font-mono text-[11px] text-[var(--text-muted)]">{root}</p>
+                        点击更改：从当前路径开始重新选择目录。
+                      </>
+                    }
+                  >
+                    <button
+                      type="button"
+                      dir="rtl"
+                      onClick={() => setPickerTarget(i)}
+                      className="min-w-0 flex-1 truncate rounded text-left font-mono text-[13px] text-[var(--text)] transition-colors hover:text-[var(--accent)]"
+                    >
+                      {"‎" + root + "‎"}
+                    </button>
+                  </Tooltip>
+                  {i === 0 ? (
+                    <Tooltip
+                      content={
+                        <>
+                          <strong>主根 = 新内容的落盘位置。</strong>
+                          订阅与手动下载完成后，按「主根/标题 (年份)」建目录入库；
+                          一个库可挂多个根，但写入点只有主根这一个。
+                        </>
+                      }
+                    >
+                      <span className="shrink-0 cursor-default rounded-full bg-[var(--accent)]/15 px-2 py-0.5 text-[10px] font-semibold text-[var(--accent)]">
+                        主根
+                      </span>
+                    </Tooltip>
+                  ) : (
+                    <Tooltip content="把该路径设为新内容的落盘位置（移到列表第一位）。已有文件不会被移动。">
+                      <button
+                        type="button"
+                        onClick={() => setRoots([root, ...roots.filter((r) => r !== root)])}
+                        className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium text-[var(--text-faint)] opacity-0 transition-opacity hover:bg-white/10 hover:text-white group-hover:opacity-100"
+                      >
+                        设为主根
+                      </button>
+                    </Tooltip>
+                  )}
+                  <button
+                    type="button"
+                    aria-label={`移除 ${root}`}
+                    onClick={() => setRoots(roots.filter((r) => r !== root))}
+                    className="shrink-0 rounded-md p-1 text-[var(--text-faint)] transition-colors hover:bg-white/10 hover:text-white"
+                  >
+                    <XIcon className="size-3.5" />
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => setPickerTarget("add")}
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-white/15 px-3 py-2.5 text-[13px] font-medium text-[var(--text-muted)] transition-colors hover:border-[var(--accent)]/50 hover:text-white"
+              >
+                <PlusIcon className="size-4" />
+                {roots.length === 0 ? "浏览服务器目录并添加" : "添加目录"}
+              </button>
+            </div>
             <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--text-faint)]">
               新入库的内容落在<strong className="font-medium text-[var(--text-muted)]">主根</strong>下：主根/标题
-              (年份)。填绝对路径；扩展根用于跨盘存量内容的盘点（后续版本接入扫描）。
+              (年份)。其余为扩展根：扫描与监控照常覆盖、存量入账，但不写入新内容，适合跨盘存放的旧内容。
             </p>
           </div>
 
@@ -553,6 +758,30 @@ export function LibraryFormDialog({
           </div>
         </div>
       </div>
+
+      {/* 服务端目录选择器：追加时从最近添加的根起步，更改时从被改的根起步；
+          追加去重，更改为原位替换（改主根仍是主根），撞上已有路径时合并去重 */}
+      <DirectoryPicker
+        open={pickerTarget !== null}
+        initialPath={
+          pickerTarget === "add" || pickerTarget === null
+            ? roots.length > 0
+              ? roots[roots.length - 1]
+              : undefined
+            : roots[pickerTarget]
+        }
+        onClose={() => setPickerTarget(null)}
+        onSelect={(path) => {
+          setRoots((prev) => {
+            if (pickerTarget === "add" || pickerTarget === null) {
+              return prev.includes(path) ? prev : [...prev, path];
+            }
+            const next = prev.map((r, idx) => (idx === pickerTarget ? path : r));
+            return next.filter((r, idx) => r !== path || idx === pickerTarget);
+          });
+          setPickerTarget(null);
+        }}
+      />
     </div>
   );
 }

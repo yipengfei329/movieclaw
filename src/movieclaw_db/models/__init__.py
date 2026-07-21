@@ -12,6 +12,7 @@ from movieclaw_db.models.agent_session import AgentSession
 from movieclaw_db.models.app_setting import AppSetting
 from movieclaw_db.models.base import TimestampMixin, utcnow
 from movieclaw_db.models.cache_entry import CacheEntry
+from movieclaw_db.models.download_hint import DownloadHint
 from movieclaw_db.models.downloader_client import ClientType, DownloaderClient
 from movieclaw_db.models.library import Library
 from movieclaw_db.models.library_file import FileSource, LibraryFile
@@ -56,6 +57,7 @@ __all__ = [
     "TriggerType",
     "AppSetting",
     "ClientType",
+    "DownloadHint",
     "DownloaderClient",
     "FileSource",
     "Library",

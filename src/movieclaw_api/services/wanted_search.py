@@ -58,10 +58,39 @@ _SEARCH_CATEGORIES: dict[str, list[TorrentCategory]] = {
     "tv": [TorrentCategory.TV, TorrentCategory.DOCUMENTARY, TorrentCategory.ANIME],
 }
 
-# tick 互斥：除定时任务外，订阅创建/调整成功后也会立即踢一次 tick（首班车不用
-# 等最多 5 分钟）。并发进入时串行执行即可——前一轮已把搜过的组按退避排期，
-# 后一轮查不到到期项自然空转，不会对站点重复搜索。
+# tick 互斥：除定时任务外，订阅域写操作产生"立刻可搜"的工单后也会立即踢一次
+# tick（首班车不用等最多 5 分钟）。并发进入时串行执行即可——前一轮已把搜过的
+# 组按退避排期，后一轮查不到到期项自然空转，不会对站点重复搜索。
 _tick_lock = asyncio.Lock()
+
+# fire-and-forget 任务的强引用集合：asyncio 只持弱引用，不留强引用的话
+# 任务可能在执行前被垃圾回收。
+_kick_tasks: set[asyncio.Task] = set()
+
+
+async def _kick_once() -> None:
+    """即时 tick 的执行体：失败只记日志，绝不向上抛（兜底永远是定时任务）。"""
+    try:
+        await search_wanted()
+    except Exception:  # noqa: BLE001 -- 环境未就绪（如测试/关停中）时静默降级
+        logger.debug("即时缺口搜索未能执行，等待定时任务兜底", exc_info=True)
+
+
+def kick_search_soon() -> None:
+    """立刻踢一次缺口搜索（fire-and-forget，任何订阅入口共用的唯一触发点）。
+
+    订阅域的写操作（创建/调整/恢复/缺失重下）产生"立刻可搜"的工单后调用。
+    仓储层逐操作即时 commit，调用时数据已落库，不存在"未提交就开搜"的竞态；
+    search_wanted 自带互斥锁与节流闸门，重复踢只会空转，天然幂等。
+    没有运行中的事件循环时（如同步脚本）静默跳过，交给定时任务兜底。
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    task = loop.create_task(_kick_once())
+    _kick_tasks.add(task)
+    task.add_done_callback(_kick_tasks.discard)
 
 
 @register_task(

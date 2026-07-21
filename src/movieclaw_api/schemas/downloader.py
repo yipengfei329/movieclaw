@@ -111,6 +111,9 @@ class DownloadSubmitPayload(BaseModel):
     library_id: int | None = Field(default=None, description="入库到哪个媒体库")
     title: str | None = Field(default=None, description="条目标题（推导条目子目录用）")
     year: int | None = Field(default=None, description="条目年份")
+    # 副标题作识别信号：落 download_hint，扫描器用其中的中文片名/「全N集」
+    # 收敛拼音命名种子（TorrentHit.subtitle 原样带过来即可）
+    subtitle: str | None = Field(default=None, description="种子副标题（识别线索用）")
 
 
 class DownloadSubmitView(BaseModel):

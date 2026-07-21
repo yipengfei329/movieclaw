@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 
 import type { Route } from "next";
 import Link from "next/link";
 
-import { ChevronLeftIcon } from "@/components/icons";
+import { ChevronLeftIcon, XIcon } from "@/components/icons";
 import {
   LIBRARY_KIND_META,
   LibraryFormDialog,
@@ -15,16 +16,22 @@ import { PosterCardVisual, type PosterVisualItem } from "@/components/poster-car
 import {
   type LibraryItem,
   type MediaLibrary,
+  type MissingItem,
   type UnidentifiedFile,
   claimFile,
+  clearMissing,
+  clearUnidentified,
   ignoreFile,
   listLibraries,
   listLibraryItems,
+  listMissing,
   listUnidentified,
+  redownloadMissing,
   startLibraryScan,
 } from "@/lib/api/libraries";
 import { listSubscriptions, type Subscription } from "@/lib/api/subscriptions";
 import { formatBytes } from "@/lib/format";
+import { formatRelativeTime } from "@/lib/time";
 import { cachedImageUrl } from "@/lib/image-proxy";
 import {
   subscriptionProgressNote,
@@ -43,10 +50,13 @@ export function LibraryDetailView({ libraryId }: { libraryId: number }) {
   const [libraries, setLibraries] = useState<MediaLibrary[] | null>(null);
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [unidentified, setUnidentified] = useState<UnidentifiedFile[]>([]);
+  const [missing, setMissing] = useState<MissingItem[]>([]);
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [failed, setFailed] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [editing, setEditing] = useState<MediaLibrary | null>(null);
+  // 工单抽屉：从哪个胶囊点进来就落在哪个 tab；null = 关闭
+  const [issueTab, setIssueTab] = useState<"missing" | "unidentified" | null>(null);
 
   const reload = useCallback(() => {
     setFailed(false);
@@ -54,12 +64,14 @@ export function LibraryDetailView({ libraryId }: { libraryId: number }) {
       listLibraries(),
       listLibraryItems(libraryId).catch(() => []),
       listUnidentified(libraryId).catch(() => []),
+      listMissing(libraryId).catch(() => []),
       listSubscriptions().catch(() => []),
     ])
-      .then(([libs, libraryItems, unknown, subs]) => {
+      .then(([libs, libraryItems, unknown, missingItems, subs]) => {
         setLibraries(libs);
         setItems(libraryItems);
         setUnidentified(unknown);
+        setMissing(missingItems);
         setSubscriptions(subs);
       })
       .catch(() => setFailed(true));
@@ -162,6 +174,44 @@ export function LibraryDetailView({ libraryId }: { libraryId: number }) {
               {formatBytes(stats.total_size_bytes)}
               {library.primary_root ? ` · ${library.primary_root}` : ""}
             </p>
+            {library.last_scan && (
+              <p className="mt-1 text-[12px] text-white/45">
+                最近扫描 {formatRelativeTime(library.last_scan.finished_at)} · 新入账{" "}
+                {library.last_scan.scanned}（识别 {library.last_scan.identified} / 待识别{" "}
+                {library.last_scan.unidentified}）
+                {library.last_scan.marked_missing > 0
+                  ? ` · 标记丢失 ${library.last_scan.marked_missing}`
+                  : ""}
+                {library.last_scan.errors.length > 0
+                  ? ` · ${library.last_scan.errors[0]}`
+                  : ""}
+              </p>
+            )}
+            {/* —— 健康状态胶囊：工单收进抽屉，海报墙保持干净 —— */}
+            {(missing.length > 0 || unidentified.length > 0) && (
+              <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                {missing.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setIssueTab("missing")}
+                    className="flex items-center gap-1.5 rounded-full border border-white/[0.14] bg-white/[0.06] px-3 py-1 text-[12px] font-semibold text-white/75 transition hover:bg-white/[0.12] hover:text-white"
+                  >
+                    <span className="size-1.5 rounded-full bg-white/40" />
+                    {missing.length} 个条目缺失
+                  </button>
+                )}
+                {unidentified.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setIssueTab("unidentified")}
+                    className="flex items-center gap-1.5 rounded-full border border-[#f5c451]/35 bg-[#f5c451]/[0.12] px-3 py-1 text-[12px] font-semibold text-[#f5c451] transition hover:bg-[#f5c451]/[0.22]"
+                  >
+                    <span className="size-1.5 rounded-full bg-[#f5c451]" />
+                    {unidentified.length} 个文件待识别
+                  </button>
+                )}
+              </div>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-2.5">
             <button
@@ -179,6 +229,14 @@ export function LibraryDetailView({ libraryId }: { libraryId: number }) {
                 <span className="flex items-center gap-2">
                   <span className="size-3.5 animate-spin rounded-full border-2 border-white/25 border-t-white/80" />
                   扫描中…
+                  {library.scan_progress && library.scan_progress.total > 0
+                    ? ` ${Math.min(
+                        100,
+                        Math.round(
+                          (library.scan_progress.processed / library.scan_progress.total) * 100,
+                        ),
+                      )}%`
+                    : ""}
                 </span>
               ) : (
                 "扫描库"
@@ -200,14 +258,17 @@ export function LibraryDetailView({ libraryId }: { libraryId: number }) {
         )}
       </div>
 
-      {/* —— 待识别（有才显示）—— */}
-      {unidentified.length > 0 && (
-        <UnidentifiedPanel
-          files={unidentified}
-          movie={library.kind === "movie"}
-          onChanged={reload}
-        />
-      )}
+      {/* —— 工单抽屉：缺失 / 待识别，从头部胶囊进入 —— */}
+      <IssueDrawer
+        open={issueTab}
+        onClose={() => setIssueTab(null)}
+        onSwitchTab={setIssueTab}
+        libraryId={libraryId}
+        missing={missing}
+        unidentified={unidentified}
+        movie={library.kind === "movie"}
+        onChanged={reload}
+      />
 
       {/* —— 库存海报墙 —— */}
       {items.length === 0 && unidentified.length === 0 ? (
@@ -277,17 +338,29 @@ function InventoryCell({ item }: { item: LibraryItem }) {
     parts.push(formatBytes(item.total_size_bytes));
   }
   if (item.resolutions.length > 0) parts.push(item.resolutions.join("/"));
+  // 文件全部缺失的"死条目"：海报置灰，一眼与在位内容区分
+  const dead = item.file_count > 0 && item.missing_count >= item.file_count;
   return (
     <div>
-      <PosterCardVisual
-        item={visual}
-        href={`/media/${item.kind}/${item.tmdb_id}` as Route}
-      />
+      <div className={dead ? "opacity-50 grayscale" : undefined}>
+        <PosterCardVisual
+          item={visual}
+          href={`/media/${item.kind}/${item.tmdb_id}` as Route}
+          action="owned"
+        />
+      </div>
       <p className="text-on-image mt-1.5 flex items-center gap-1.5 truncate text-[11px] text-[var(--text-muted)]">
-        <span className="size-1.5 shrink-0 rounded-full bg-[#4ade80]" />
+        <span
+          className={`size-1.5 shrink-0 rounded-full ${
+            dead ? "bg-white/30" : item.missing_count > 0 ? "bg-[#f5c451]" : "bg-[#4ade80]"
+          }`}
+        />
         <span className="truncate">
-          {parts.join(" · ") || "已入库"}
-          {item.missing_count > 0 ? ` · ${item.missing_count} 个文件缺失` : ""}
+          {dead
+            ? "文件已全部缺失"
+            : `${parts.join(" · ") || "已入库"}${
+                item.missing_count > 0 ? ` · ${item.missing_count} 个文件缺失` : ""
+              }`}
         </span>
       </p>
     </div>
@@ -307,7 +380,8 @@ function PendingCell({ sub }: { sub: Subscription }) {
   };
   return (
     <div className="opacity-80 transition hover:opacity-100">
-      <PosterCardVisual item={visual} href={`/subscriptions/${sub.id}` as Route} />
+      {/* 已是订阅产物，悬浮层不再给「订阅影片」重复入口 */}
+      <PosterCardVisual item={visual} href={`/subscriptions/${sub.id}` as Route} action="none" />
       <p className="text-on-image mt-1.5 flex items-center gap-1.5 truncate text-[11px] text-[var(--text-muted)]">
         <span
           className="size-1.5 shrink-0 rounded-full"
@@ -321,33 +395,274 @@ function PendingCell({ sub }: { sub: Subscription }) {
   );
 }
 
-/* —— 待识别面板：行内认领（TMDB ID + 季集）或忽略 —— */
+/* —— 工单抽屉：缺失 / 待识别双 tab，右侧滑出，海报墙不再被工单铺满 —— */
 
-function UnidentifiedPanel({
-  files,
+function IssueDrawer({
+  open,
+  onClose,
+  onSwitchTab,
+  libraryId,
+  missing,
+  unidentified,
   movie,
   onChanged,
 }: {
-  files: UnidentifiedFile[];
+  open: "missing" | "unidentified" | null;
+  onClose: () => void;
+  onSwitchTab: (tab: "missing" | "unidentified") => void;
+  libraryId: number;
+  missing: MissingItem[];
+  unidentified: UnidentifiedFile[];
   movie: boolean;
   onChanged: () => void;
 }) {
-  return (
-    <div className="mx-6 mt-6 rounded-2xl border border-[#f5c451]/25 bg-[#f5c451]/[0.06] p-4">
-      <h3 className="text-[13.5px] font-semibold text-[#f5c451]">
-        {files.length} 个文件待识别
-        <span className="ml-2 text-[12px] font-normal text-[var(--text-muted)]">
-          扫描时无法确认身份；填入 TMDB ID 认领，或从台账忽略（都不动磁盘文件）
-        </span>
-      </h3>
-      <div className="mt-3 space-y-2">
-        {files.map((file) => (
-          <UnidentifiedRow key={file.id} file={file} movie={movie} onChanged={onChanged} />
-        ))}
+  const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // 打开/切 tab 时清空过滤词；Escape 关闭
+  useEffect(() => {
+    setQuery("");
+  }, [open]);
+  useEffect(() => {
+    if (open === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  if (open === null || typeof document === "undefined") return null;
+
+  const keyword = query.trim().toLowerCase();
+  const missingShown = keyword
+    ? missing.filter((m) => m.title.toLowerCase().includes(keyword))
+    : missing;
+  const unidentifiedShown = keyword
+    ? unidentified.filter((f) => f.file_path.toLowerCase().includes(keyword))
+    : unidentified;
+  const missingFileTotal = missing.reduce((n, item) => n + item.files.length, 0);
+
+  const tabClass = (active: boolean) =>
+    `rounded-full px-3.5 py-1.5 text-[12.5px] font-semibold transition ${
+      active ? "bg-white/[0.14] text-white" : "text-[var(--text-muted)] hover:text-white"
+    }`;
+
+  return createPortal(
+    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="库工单">
+      <button
+        type="button"
+        aria-label="关闭"
+        onClick={onClose}
+        className="absolute inset-0 cursor-default bg-black/50 backdrop-blur-[2px]"
+      />
+      <div className="absolute right-0 top-0 flex h-full w-full max-w-[600px] flex-col border-l border-white/10 bg-[rgba(16,18,26,0.94)] shadow-[-24px_0_70px_rgba(0,0,0,0.55)] backdrop-blur-2xl">
+        {/* 头部：tab + 关闭 */}
+        <div className="flex items-center justify-between gap-3 border-b border-white/[0.08] px-5 py-3.5">
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => onSwitchTab("missing")}
+              className={tabClass(open === "missing")}
+            >
+              缺失 {missing.length > 0 ? missing.length : ""}
+            </button>
+            <button
+              type="button"
+              onClick={() => onSwitchTab("unidentified")}
+              className={tabClass(open === "unidentified")}
+            >
+              待识别 {unidentified.length > 0 ? unidentified.length : ""}
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="关闭抽屉"
+            className="btn-glass flex size-8 items-center justify-center !rounded-full"
+          >
+            <XIcon className="size-4" />
+          </button>
+        </div>
+
+        {/* 工具行：过滤 + 批量操作 */}
+        <div className="flex items-center gap-2.5 border-b border-white/[0.08] px-5 py-3">
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={open === "missing" ? "按片名过滤…" : "按文件名过滤…"}
+            className="min-w-0 flex-1 rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 text-[12.5px] text-[var(--text)] outline-none placeholder:text-white/30 focus:border-[var(--accent)]/60"
+          />
+          {open === "missing" && missing.length > 0 && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    `清理全部 ${missingFileTotal} 条缺失记录？（只删台账，不动磁盘）`,
+                  )
+                )
+                  return;
+                setBusy(true);
+                void clearMissing(libraryId)
+                  .then(onChanged)
+                  .catch(() => {})
+                  .finally(() => setBusy(false));
+              }}
+              className="btn-glass shrink-0 px-3 py-1.5 text-[12px] font-medium disabled:opacity-50"
+            >
+              全部清理
+            </button>
+          )}
+          {open === "unidentified" && unidentified.length > 0 && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    `忽略全部 ${unidentified.length} 个待识别文件？（只删台账，不动磁盘；文件还在时重新扫描会再次发现）`,
+                  )
+                )
+                  return;
+                setBusy(true);
+                void clearUnidentified(libraryId)
+                  .then(onChanged)
+                  .catch(() => {})
+                  .finally(() => setBusy(false));
+              }}
+              className="btn-glass shrink-0 px-3 py-1.5 text-[12px] font-medium disabled:opacity-50"
+            >
+              全部忽略
+            </button>
+          )}
+        </div>
+
+        {/* 说明行 */}
+        <p className="px-5 pt-3 text-[11.5px] leading-5 text-[var(--text-muted)]">
+          {open === "missing"
+            ? "文件已不在磁盘；「重新下载」交给订阅管线补回，「清理记录」只删台账（都不动磁盘）；文件回归会自动恢复。"
+            : "扫描时无法确认身份；填入 TMDB ID 认领，或从台账忽略（都不动磁盘文件）。"}
+        </p>
+
+        {/* 列表区：独立滚动 */}
+        <div className="scroll-thin min-h-0 flex-1 space-y-2 overflow-y-auto px-5 py-4">
+          {open === "missing" &&
+            missingShown.map((item) => (
+              <MissingRow
+                key={item.media_item_id}
+                libraryId={libraryId}
+                item={item}
+                onChanged={onChanged}
+              />
+            ))}
+          {open === "unidentified" &&
+            unidentifiedShown.map((file) => (
+              <UnidentifiedRow key={file.id} file={file} movie={movie} onChanged={onChanged} />
+            ))}
+          {((open === "missing" && missingShown.length === 0) ||
+            (open === "unidentified" && unidentifiedShown.length === 0)) && (
+            <p className="mt-12 text-center text-[13px] text-[var(--text-muted)]">
+              {keyword ? "没有匹配的条目" : "没有需要处理的了 🎉"}
+            </p>
+          )}
+        </div>
       </div>
+    </div>,
+    document.body,
+  );
+}
+
+function MissingRow({
+  libraryId,
+  item,
+  onChanged,
+}: {
+  libraryId: number;
+  item: MissingItem;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+
+  const act = (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    setError(null);
+    void fn()
+      .then(onChanged)
+      .catch((e) => setError((e as Error).message))
+      .finally(() => setBusy(false));
+  };
+
+  // 剧集：按季聚合缺失集数做摘要；电影：单文件
+  const summary =
+    item.kind === "tv"
+      ? Array.from(
+          item.files.reduce((m, f) => {
+            m.set(f.season_number, (m.get(f.season_number) ?? 0) + 1);
+            return m;
+          }, new Map<number, number>()),
+        )
+          .sort(([a], [b]) => a - b)
+          .map(([s, n]) => (s === 0 ? `特别篇 ${n} 集` : `第 ${s} 季缺 ${n} 集`))
+          .join("、")
+      : `${item.files.length} 个文件`;
+
+  return (
+    <div className="rounded-xl bg-white/[0.03] px-3.5 py-2.5">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-white/85">
+          {item.title}
+          {item.year ? ` (${item.year})` : ""}
+          <span className="ml-2 text-[12px] font-normal text-[var(--text-muted)]">{summary}</span>
+        </span>
+        {done ? (
+          <span className="text-[12px] text-[#4ade80]">{done}</span>
+        ) : (
+          <span className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                act(() =>
+                  redownloadMissing(libraryId, item.media_item_id).then(({ requeued }) => {
+                    setDone(`已交给订阅管线（${requeued} 个工单排队）`);
+                  }),
+                )
+              }
+              className="btn-accent rounded-full px-3 py-1.5 text-[12px] font-semibold disabled:opacity-50"
+            >
+              重新下载
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                const warning = item.subscription_id
+                  ? `「${item.title}」有正在追踪的订阅，只清记录的话订阅可能把它重新下回来。仍要清理这 ${item.files.length} 条缺失记录？`
+                  : `清理「${item.title}」的 ${item.files.length} 条缺失记录？（只删台账，不动磁盘）`;
+                if (!window.confirm(warning)) return;
+                act(() => clearMissing(libraryId, item.media_item_id));
+              }}
+              className="btn-glass px-3 py-1.5 text-[12px] font-medium disabled:opacity-50"
+            >
+              清理记录
+            </button>
+          </span>
+        )}
+      </div>
+      {item.subscription_id && !done && (
+        <p className="mt-1 text-[11.5px] text-[#f5c451]/80">该条目有订阅在追踪</p>
+      )}
+      {error && <p className="mt-1 text-[11.5px] text-red-300">{error}</p>}
     </div>
   );
 }
+
+/* —— 待识别行：行内认领（TMDB ID + 季集）或忽略 —— */
 
 function UnidentifiedRow({
   file,

@@ -7,16 +7,28 @@ from sqlmodel import select
 from movieclaw_api.exceptions import BadRequestException, ConflictException, NotFoundException
 from movieclaw_api.schemas.library import (
     ClaimPayload,
+    LastScanView,
     LibraryItemView,
     LibraryPayload,
     LibraryStats,
     LibraryView,
+    MissingClearPayload,
+    MissingFileView,
+    MissingItemView,
+    RedownloadPayload,
+    ScanProgressView,
     ScanResultView,
+    UnidentifiedClearPayload,
     UnidentifiedFileView,
 )
 from movieclaw_api.schemas.response import ApiResponse, ok
 from movieclaw_api.services.library_config import LibraryConfigService
-from movieclaw_api.services.library_scan import is_scanning, scan_library
+from movieclaw_api.services.library_scan import (
+    is_scanning,
+    last_scan,
+    scan_library,
+    scan_progress,
+)
 from movieclaw_api.services.media_discover import get_tmdb_client
 from movieclaw_api.services.media_library import MediaLibraryService
 from movieclaw_db.engine import get_session
@@ -25,6 +37,31 @@ from movieclaw_db.repositories.library_file_repo import LibraryFileRepository
 from movieclaw_media.models import MediaKind
 
 router = APIRouter(prefix="/libraries", tags=["libraries"])
+
+
+def _scan_progress_view(library_id: int) -> ScanProgressView | None:
+    """进行中扫描的实时进度；没在扫返回 None。"""
+    progress = scan_progress(library_id)
+    if progress is None:
+        return None
+    processed, total = progress
+    return ScanProgressView(processed=processed, total=total)
+
+
+def _last_scan_view(library_id: int) -> LastScanView | None:
+    """把进程内的最近扫描记录转成接口视图；没扫过返回 None。"""
+    record = last_scan(library_id)
+    if record is None:
+        return None
+    finished_at, summary = record
+    return LastScanView(
+        finished_at=finished_at,
+        scanned=summary.scanned,
+        identified=summary.identified,
+        unidentified=summary.unidentified,
+        marked_missing=summary.marked_missing,
+        errors=list(summary.errors),
+    )
 
 
 async def _stats_by_library(session: AsyncSession) -> dict[int, LibraryStats]:
@@ -36,6 +73,8 @@ async def _stats_by_library(session: AsyncSession) -> dict[int, LibraryStats]:
         s = stats.setdefault(row.library_id, LibraryStats())
         s.file_count += 1
         s.total_size_bytes += row.size_bytes
+        if row.missing_since is not None:
+            s.missing_count += 1
         if row.media_item_id is None:
             s.unidentified_count += 1
         else:
@@ -63,6 +102,8 @@ async def list_libraries(
                 r,
                 stats=stats.get(r.id or -1),
                 scanning=is_scanning(r.id or -1),
+                scan_progress=_scan_progress_view(r.id or -1),
+                last_scan=_last_scan_view(r.id or -1),
             )
             for r in rows
         ]
@@ -108,7 +149,14 @@ async def get_library(
     session: AsyncSession = Depends(get_session),
 ) -> ApiResponse[LibraryView]:
     service = LibraryConfigService(session)
-    return ok(LibraryView.from_model(await service.get(library_id)))
+    return ok(
+        LibraryView.from_model(
+            await service.get(library_id),
+            scanning=is_scanning(library_id),
+            scan_progress=_scan_progress_view(library_id),
+            last_scan=_last_scan_view(library_id),
+        )
+    )
 
 
 @router.post(
@@ -239,10 +287,172 @@ async def list_library_items(
                 episode_count=len(units) if item.kind == "tv" else 0,
                 resolutions=sorted({f.resolution for f in files if f.resolution}, reverse=True),
                 missing_count=sum(1 for f in files if f.missing_since is not None),
+                added_at=max(f.created_at for f in files),
             )
         )
     views.sort(key=lambda v: v.title)
     return ok(views)
+
+
+@router.get(
+    "/{library_id}/missing",
+    response_model=ApiResponse[list[MissingItemView]],
+    summary="缺失清单：文件已不在磁盘的库存，按条目聚合",
+)
+async def list_missing(
+    library_id: int,
+    session: AsyncSession = Depends(get_session),
+) -> ApiResponse[list[MissingItemView]]:
+    from movieclaw_api.core.config import get_settings
+    from movieclaw_db.models import Subscription
+
+    service = LibraryConfigService(session)
+    await service.get(library_id)  # 404 检查
+    result = await session.execute(
+        select(LibraryFile, MediaItem)
+        .join(MediaItem, LibraryFile.media_item_id == MediaItem.id)  # type: ignore[arg-type]
+        .where(
+            LibraryFile.library_id == library_id,
+            LibraryFile.missing_since.is_not(None),  # type: ignore[union-attr]
+        )
+    )
+    grouped: dict[int, tuple[MediaItem, list[LibraryFile]]] = {}
+    for file, item in result.all():
+        assert item.id is not None
+        grouped.setdefault(item.id, (item, []))[1].append(file)
+    if not grouped:
+        return ok([])
+
+    # 有订阅的条目要标出来：清理记录后订阅可能把它重新下回来
+    subs = await session.execute(
+        select(Subscription).where(Subscription.media_item_id.in_(grouped.keys()))  # type: ignore[union-attr]
+    )
+    sub_by_item = {s.media_item_id: s.id for s in subs.scalars().all()}
+
+    base = get_settings().tmdb_image_base_url.rstrip("/")
+    views = [
+        MissingItemView(
+            media_item_id=item.id,  # type: ignore[arg-type]
+            kind=MediaKind(item.kind),
+            tmdb_id=item.tmdb_id,
+            title=item.title,
+            year=item.year,
+            poster_url=f"{base}/w500{item.poster_path}" if item.poster_path else None,
+            subscription_id=sub_by_item.get(item.id),
+            files=[
+                MissingFileView(
+                    id=f.id,  # type: ignore[arg-type]
+                    file_path=f.file_path,
+                    season_number=f.season_number,
+                    episode_number=f.episode_number,
+                    size_bytes=f.size_bytes,
+                )
+                for f in sorted(files, key=lambda f: (f.season_number, f.episode_number))
+            ],
+        )
+        for item, files in grouped.values()
+    ]
+    views.sort(key=lambda v: v.title)
+    return ok(views)
+
+
+@router.post(
+    "/missing/clear",
+    response_model=ApiResponse[dict],
+    summary="清理缺失记录（只删台账，绝不动磁盘）；不带 media_item_id 清整库",
+)
+async def clear_missing(
+    payload: MissingClearPayload,
+    session: AsyncSession = Depends(get_session),
+) -> ApiResponse[dict]:
+    service = LibraryConfigService(session)
+    await service.get(payload.library_id)  # 404 检查
+    conditions = [
+        LibraryFile.library_id == payload.library_id,
+        LibraryFile.missing_since.is_not(None),  # type: ignore[union-attr]
+    ]
+    if payload.media_item_id is not None:
+        conditions.append(LibraryFile.media_item_id == payload.media_item_id)
+    rows = list((await session.execute(select(LibraryFile).where(*conditions))).scalars().all())
+    for row in rows:
+        await session.delete(row)
+    # 本项目约定：get_session 不自动提交，事务由业务层显式收口
+    await session.commit()
+    return ok({"cleared": len(rows)}, message=f"已清理 {len(rows)} 条缺失记录（磁盘未动）")
+
+
+@router.post(
+    "/unidentified/clear",
+    response_model=ApiResponse[dict],
+    summary="批量忽略整库的待识别文件（只删台账，绝不动磁盘）",
+)
+async def clear_unidentified(
+    payload: UnidentifiedClearPayload,
+    session: AsyncSession = Depends(get_session),
+) -> ApiResponse[dict]:
+    service = LibraryConfigService(session)
+    await service.get(payload.library_id)  # 404 检查
+    rows = list(
+        (
+            await session.execute(
+                select(LibraryFile).where(
+                    LibraryFile.library_id == payload.library_id,
+                    LibraryFile.media_item_id.is_(None),  # type: ignore[union-attr]
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for row in rows:
+        await session.delete(row)
+    # 本项目约定：get_session 不自动提交，事务由业务层显式收口
+    await session.commit()
+    return ok({"cleared": len(rows)}, message=f"已忽略 {len(rows)} 个待识别文件（磁盘未动）")
+
+
+@router.post(
+    "/missing/redownload",
+    response_model=ApiResponse[dict],
+    summary="重新下载缺失内容：缺失单元交回订阅管线（无订阅则按缺失季创建）",
+)
+async def redownload_missing(
+    payload: RedownloadPayload,
+    session: AsyncSession = Depends(get_session),
+) -> ApiResponse[dict]:
+    from movieclaw_api.services.subscription import SubscriptionService
+
+    service = LibraryConfigService(session)
+    await service.get(payload.library_id)  # 404 检查
+    item = await session.get(MediaItem, payload.media_item_id)
+    if item is None:
+        raise NotFoundException("媒体条目不存在")
+    rows = list(
+        (
+            await session.execute(
+                select(LibraryFile).where(
+                    LibraryFile.library_id == payload.library_id,
+                    LibraryFile.media_item_id == payload.media_item_id,
+                    LibraryFile.missing_since.is_not(None),  # type: ignore[union-attr]
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not rows:
+        raise BadRequestException("该条目没有缺失文件")
+    units = {(r.season_number, r.episode_number) for r in rows}
+    subscriptions = SubscriptionService(
+        session, MediaLibraryService(session, get_tmdb_client())
+    )
+    subscription, requeued = await subscriptions.redownload_missing_units(
+        MediaKind(item.kind), item, units, library_id=payload.library_id
+    )
+    return ok(
+        {"subscription_id": subscription.id, "requeued": requeued},
+        message=f"《{item.title}》的 {len(units)} 个缺失单元已交给订阅管线补回",
+    )
 
 
 @router.post(

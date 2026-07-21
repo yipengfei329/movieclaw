@@ -129,6 +129,8 @@ export interface DownloadSubmitPayload {
   /** 条目标题（推导条目子目录用；身份未确认时不要带） */
   title?: string | null;
   year?: number | null;
+  /** 种子副标题（识别线索：中文片名/「全N集」帮扫描器收敛拼音命名种子） */
+  subtitle?: string | null;
 }
 
 /** 手动提交下载的结果（见 schemas.downloader.DownloadSubmitView）。 */

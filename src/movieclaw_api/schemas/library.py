@@ -27,6 +27,31 @@ class LibraryStats(BaseModel):
     file_count: int = Field(default=0, description="在账文件总数（含待识别）")
     total_size_bytes: int = Field(default=0, description="文件总大小（字节）")
     unidentified_count: int = Field(default=0, description="待识别文件数")
+    missing_count: int = Field(default=0, description="标记 missing 的文件数（缺失清单入口）")
+
+
+class LastScanView(BaseModel):
+    """最近一次扫描的结论——扫描常毫秒级结束，前端靠它给用户"点了有反应"的反馈。"""
+
+    finished_at: datetime
+    scanned: int = Field(description="本轮新入账文件数")
+    identified: int
+    unidentified: int
+    marked_missing: int = Field(description="本轮标记丢失的文件数")
+    errors: list[str] = Field(default_factory=list)
+
+    @field_serializer("finished_at")
+    def _serialize_utc(self, value: datetime) -> str:
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        return value.isoformat()
+
+
+class ScanProgressView(BaseModel):
+    """进行中扫描的实时进度（前端在库封面上画进度环）。"""
+
+    processed: int
+    total: int
 
 
 class LibraryView(BaseModel):
@@ -38,6 +63,8 @@ class LibraryView(BaseModel):
     is_default: bool
     stats: LibraryStats = Field(default_factory=LibraryStats)
     scanning: bool = Field(default=False, description="是否正在扫描")
+    scan_progress: ScanProgressView | None = Field(default=None, description="扫描实时进度")
+    last_scan: LastScanView | None = Field(default=None, description="最近一次扫描结论")
     created_at: datetime
     updated_at: datetime
 
@@ -56,6 +83,8 @@ class LibraryView(BaseModel):
         *,
         stats: LibraryStats | None = None,
         scanning: bool = False,
+        scan_progress: ScanProgressView | None = None,
+        last_scan: LastScanView | None = None,
     ) -> LibraryView:
         return cls(
             id=row.id,  # type: ignore[arg-type]  # 落库后必有主键
@@ -66,6 +95,8 @@ class LibraryView(BaseModel):
             is_default=row.is_default,
             stats=stats or LibraryStats(),
             scanning=scanning,
+            scan_progress=scan_progress,
+            last_scan=last_scan,
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
@@ -88,6 +119,17 @@ class LibraryItemView(BaseModel):
     # 去重的介质规格标签（如 ["2160p","1080p"]），探测不到为空
     resolutions: list[str]
     missing_count: int = Field(description="标记 missing 的文件数（>0 时前端提示）")
+    added_at: datetime | None = Field(
+        default=None, description="最近一次文件入账时间（首页「最近添加」排序依据）"
+    )
+
+    @field_serializer("added_at")
+    def _serialize_utc(self, value: datetime | None) -> str | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        return value.isoformat()
 
 
 class UnidentifiedFileView(BaseModel):
@@ -108,6 +150,51 @@ class ClaimPayload(BaseModel):
     tmdb_id: int
     season_number: int = 0
     episode_number: int = 0
+
+
+class MissingFileView(BaseModel):
+    """缺失清单里的一个文件。"""
+
+    id: int
+    file_path: str
+    season_number: int
+    episode_number: int
+    size_bytes: int
+
+
+class MissingItemView(BaseModel):
+    """缺失清单的一行：按媒体条目聚合（一个条目可能缺多个文件）。"""
+
+    media_item_id: int
+    kind: MediaKind
+    tmdb_id: int
+    title: str
+    year: int | None
+    poster_url: str | None
+    subscription_id: int | None = Field(
+        default=None, description="该条目已有订阅时给出——清理记录前提示用户（订阅可能重新下回来）"
+    )
+    files: list[MissingFileView]
+
+
+class MissingClearPayload(BaseModel):
+    """清理缺失记录（只删台账行，绝不动磁盘）。media_item_id 缺省 = 清整库。"""
+
+    library_id: int
+    media_item_id: int | None = None
+
+
+class RedownloadPayload(BaseModel):
+    """重新下载：把某条目的缺失单元交回订阅管线。"""
+
+    library_id: int
+    media_item_id: int
+
+
+class UnidentifiedClearPayload(BaseModel):
+    """批量忽略整库的待识别文件（只删台账，绝不动磁盘）。"""
+
+    library_id: int
 
 
 class ScanResultView(BaseModel):

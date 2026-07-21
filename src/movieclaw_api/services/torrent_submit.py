@@ -21,7 +21,7 @@ from sqlmodel import select
 
 from movieclaw_api.exceptions import BadRequestException, UpstreamServiceException
 from movieclaw_api.services.site_access import SiteUnavailableError, get_site_access
-from movieclaw_db.models import DownloaderClient
+from movieclaw_db.models import DownloaderClient, DownloadHint, utcnow
 from movieclaw_db.models.site_credential import ConfigStatus
 from movieclaw_db.repositories.downloader_repo import DownloaderRepository
 from movieclaw_downloader.factory import create_downloader
@@ -37,12 +37,16 @@ async def submit_torrent(
     download_url: str | None,
     tags: list[str],
     save_path: str | None = None,
+    subtitle: str | None = None,
 ) -> tuple[SubmitResult, DownloaderClient]:
     """从站点取回种子并提交到默认下载器，返回（提交结果, 所用下载器记录）。
 
     tags 用于区分来源（如手动 movieclaw-manual / 订阅 movieclaw-sub），
     方便用户在下载器里筛选。save_path 由调用方按媒体库推导（缺省回落
-    下载器配置的默认目录）。
+    下载器配置的默认目录）。subtitle 是种子副标题：与库推导的 save_path
+    同时在场时落一条 download_hint，供扫描器识别时取用（副标题里的中文
+    片名是拼音命名种子唯一可用的查询词）——调用方只在 save_path 为
+    **条目级**目录时传入，锚到库主根会波及根下所有文件。
     """
     if not download_url:
         raise BadRequestException("该种子没有可用的下载入口（download_url 缺失）")
@@ -102,4 +106,31 @@ async def submit_torrent(
         submit_result.already_exists,
         effective_save_path or "（下载器默认）",
     )
+
+    # 4. 落下载线索：只锚调用方给的库推导目录（下载器默认目录不在库根、
+    # 扫描器看不见）。提交已成功，线索写失败只损失识别信号，不能连累提交。
+    if save_path and subtitle and subtitle.strip():
+        try:
+            await _upsert_hint(
+                session, save_path=save_path, subtitle=subtitle.strip(), site_id=site_id
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "下载线索写入失败（目录 %s），副标题识别信号将缺失", save_path, exc_info=True
+            )
     return submit_result, row
+
+
+async def _upsert_hint(
+    session: AsyncSession, *, save_path: str, subtitle: str, site_id: str
+) -> None:
+    """按目录幂等落线索：同一条目重复提交（换版本重下）覆盖为最新副标题。"""
+    result = await session.execute(select(DownloadHint).where(DownloadHint.save_path == save_path))
+    existing = result.scalars().first()
+    if existing is None:
+        session.add(DownloadHint(save_path=save_path, subtitle=subtitle, site_id=site_id))
+    else:
+        existing.subtitle = subtitle
+        existing.site_id = site_id
+        existing.updated_at = utcnow()
+    await session.commit()

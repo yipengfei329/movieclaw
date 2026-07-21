@@ -52,6 +52,9 @@ async def submit_download(
         download_url=payload.download_url,
         tags=["movieclaw-manual"],
         save_path=derived_path,
+        # 线索只锚**条目级**目录（带 title 才推导得出）；落库主根时不传，
+        # 否则前缀匹配会波及根下所有文件
+        subtitle=payload.subtitle if payload.title else None,
     )
     assert row.id is not None  # 落库记录必有主键
     view = DownloadSubmitView(

@@ -379,3 +379,72 @@ async def test_rule_set_spec_validation(db) -> None:
             "高清免费", {"resolutions": ["2160p", "1080p"], "free_only": True}
         )
         assert row.spec == {"resolutions": ["2160p", "1080p"], "free_only": True}
+
+
+async def test_redownload_missing_units_creates_and_resets(db) -> None:
+    """媒体库缺失找回（P0）：无订阅按缺失季创建；已 imported 的工单显式
+    重置回 wanted 并立即排队——与 update 的"终态保留"铁律刻意相反。"""
+    async with db.session() as session:
+        service = _service(session)
+        item, _, _ = await service.prepare(MediaKind.TV, 200)
+
+        # 无订阅 → 自动创建，初始工单恰好覆盖缺失单元
+        sub, requeued = await service.redownload_missing_units(
+            MediaKind.TV, item, {(1, 1), (1, 2)}
+        )
+        assert requeued == 2
+        wanted = await _wanted_of(session, sub.id)
+        assert {(w.season_number, w.episode_number) for w in wanted} == {(1, 1), (1, 2)}
+
+        # 其中一集走完管线（终态 imported），随后文件又缺了
+        w11 = next(w for w in wanted if (w.season_number, w.episode_number) == (1, 1))
+        w11.status = WantedStatus.IMPORTED
+        w11.info_hash = "deadbeef"
+        session.add(w11)
+        await session.flush()
+
+        sub2, requeued2 = await service.redownload_missing_units(MediaKind.TV, item, {(1, 1)})
+        assert sub2.id == sub.id and requeued2 == 1
+        refreshed = await _wanted_of(session, sub.id)
+        w11b = next(w for w in refreshed if (w.season_number, w.episode_number) == (1, 1))
+        assert w11b.status == WantedStatus.WANTED
+        assert w11b.info_hash is None and w11b.imported_at is None
+        assert w11b.next_search_at is not None  # 立即排队真实搜索
+
+        # 已在队列里的 wanted 行不动（别清人家的退避计数）
+        _, requeued3 = await service.redownload_missing_units(MediaKind.TV, item, {(1, 2)})
+        assert requeued3 == 0
+
+
+# ---------------------------------------------------------------------------
+# 即时搜索触发收口在 service 层（任何入口共用，不依赖路由自觉）
+# ---------------------------------------------------------------------------
+
+
+async def test_write_paths_kick_instant_search(db, monkeypatch) -> None:
+    """产生"立刻可搜"工单的写路径都要踢即时搜索；纯状态操作不踢。
+
+    回归背景：触发曾散落在 HTTP 路由层，媒体库"缺失重下"入口漏加，
+    电影订阅创建后只能干等定时 tick。
+    """
+    from movieclaw_api.services import wanted_search
+
+    kicks: list[int] = []
+    monkeypatch.setattr(wanted_search, "kick_search_soon", lambda: kicks.append(1))
+
+    async with db.session() as session:
+        service = _service(session)
+        sub = await service.create(MediaKind.MOVIE, 100)
+        assert len(kicks) == 1  # 创建即搜
+
+        await service.set_paused(sub.id, True)
+        assert len(kicks) == 1  # 暂停是纯状态操作，不踢
+        await service.set_paused(sub.id, False)
+        assert len(kicks) == 2  # 恢复后立即处理积压的到期工单
+
+        wanted = (await _wanted_of(session, sub.id))[0]
+        await _mark(session, wanted, WantedStatus.IMPORTED)
+        item, _, _ = await service.prepare(MediaKind.MOVIE, 100)
+        _, requeued = await service.redownload_missing_units(MediaKind.MOVIE, item, {(0, 0)})
+        assert requeued == 1
+        assert len(kicks) == 3  # 缺失重下同样即时发车

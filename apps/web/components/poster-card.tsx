@@ -24,7 +24,17 @@ export interface PosterCardProps {
   item: MediaItem;
   /** Top 10 排名（1 起）；传入即渲染描边大数字变体 */
   rank?: number;
+  /** 悬浮层的操作区变体，默认「订阅影片」 */
+  action?: PosterCardAction;
 }
+
+/**
+ * 悬浮层操作区的三种形态，按内容与用户的关系选择：
+ * - subscribe：还没拥有（发现页/搜索），给「订阅影片」入口；
+ * - owned：已在媒体库（库首页最近添加、单库库存墙），订阅无意义，改为「已入库」标识；
+ * - none：已订阅但尚未落地（单库页「追踪中」），再给订阅按钮是重复操作，不显示。
+ */
+export type PosterCardAction = "subscribe" | "owned" | "none";
 
 /**
  * 海报卡片的最小视觉契约。搜索结果不含年份和类型，缺失字段保持不显示，
@@ -45,13 +55,14 @@ export interface PosterVisualItem {
   overview?: string;
 }
 
-export function PosterCard({ item, rank }: PosterCardProps) {
+export function PosterCard({ item, rank, action }: PosterCardProps) {
   // 点击整卡（含 hover 信息层）进入该影片的详情页
   const { open } = useMediaDetail();
   return (
     <PosterCardVisual
       item={item}
       rank={rank}
+      action={action}
       onClick={() => open(item)}
     />
   );
@@ -63,13 +74,15 @@ export function PosterCardVisual({
   rank,
   onClick,
   href,
+  action = "subscribe",
 }: {
   item: PosterVisualItem;
   rank?: number;
   onClick?: () => void;
   href?: Route;
+  action?: PosterCardAction;
 }) {
-  const content = <PosterCardContent item={item} rank={rank} />;
+  const content = <PosterCardContent item={item} rank={rank} action={action} />;
   const interactiveClass =
     "group/card block w-full cursor-pointer rounded-2xl text-left outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]";
   if (href) {
@@ -90,9 +103,11 @@ export function PosterCardVisual({
 function PosterCardContent({
   item,
   rank,
+  action = "subscribe",
 }: {
   item: PosterVisualItem;
   rank?: number;
+  action?: PosterCardAction;
 }) {
   const { open: openSubscribe } = useSubscribeEntry();
   const badges = item.badges ?? [];
@@ -154,32 +169,42 @@ function PosterCardContent({
                 {overview}
               </p>
             )}
-            <div className="mt-2.5 flex items-center gap-2">
-              {/* 全站统一的唯一操作：订阅影片（打开订阅弹层）。外层整卡是
-                  button/Link，内层不能再嵌 button，用 role=button 的 span 承载；
-                  preventDefault 拦掉 Link 跳转，stopPropagation 拦掉整卡 onClick。 */}
-              <span
-                role="button"
-                tabIndex={0}
-                aria-label={`订阅《${item.title}》`}
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  void openSubscribe(item);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    void openSubscribe(item);
-                  }
-                }}
-                className="btn-accent flex h-7 items-center gap-1 rounded-full px-3 text-[11px] font-semibold"
-              >
-                <PlayIcon className="size-3" />
-                订阅影片
-              </span>
-            </div>
+            {action !== "none" && (
+              <div className="mt-2.5 flex items-center gap-2">
+                {action === "subscribe" ? (
+                  /* 未拥有的内容才给订阅入口（打开订阅弹层）。外层整卡是
+                     button/Link，内层不能再嵌 button，用 role=button 的 span 承载；
+                     preventDefault 拦掉 Link 跳转，stopPropagation 拦掉整卡 onClick。 */
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`订阅《${item.title}》`}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      void openSubscribe(item);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        void openSubscribe(item);
+                      }
+                    }}
+                    className="btn-accent flex h-7 items-center gap-1 rounded-full px-3 text-[11px] font-semibold"
+                  >
+                    <PlayIcon className="size-3" />
+                    订阅影片
+                  </span>
+                ) : (
+                  /* 已入库标识：非交互，与库存格下方的绿点语言一致 */
+                  <span className="flex h-7 items-center gap-1.5 rounded-full bg-white/[0.14] px-3 text-[11px] font-semibold text-white/90 backdrop-blur-sm">
+                    <span className="size-1.5 rounded-full bg-[#4ade80]" />
+                    已入库
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -189,10 +214,11 @@ function PosterCardContent({
         <p className="text-on-image truncate text-[13px] font-semibold text-[var(--text)]">
           {item.title}
         </p>
-        {(item.year !== undefined || item.extent) && (
+        {/* year 用真值判断：媒体库条目缺失年份时以 0 占位，不应显示出来 */}
+        {(!!item.year || item.extent) && (
           <p className="text-on-image tnum mt-0.5 truncate text-[11px] text-[var(--text-muted)]">
-            {item.year}
-            {item.year !== undefined && item.extent ? " · " : ""}
+            {item.year || ""}
+            {!!item.year && item.extent ? " · " : ""}
             {item.extent}
           </p>
         )}

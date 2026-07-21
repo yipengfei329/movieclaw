@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -11,7 +12,6 @@ import {
   PanelLeftIcon,
   PencilIcon,
   PlusIcon,
-  SparkIcon,
   TrashIcon,
 } from "@/components/icons";
 import { UserMenu } from "@/components/user-menu";
@@ -99,26 +99,31 @@ export function Sidebar({
   const glass = sidebarGlass(prefs.sidebar);
   const body = (
     <>
-      {/* 品牌头部。展开：品牌 + 开合/搜索图标横排；折叠：徽标、开合、搜索竖排居中。
+      {/* 品牌头部。展开：完整字标 + 开合/搜索图标横排；折叠：独立徽标、开合、搜索竖排居中。
           开合按钮与搜索共用同一套图标按钮样式（⌘K 在两种形态下均可唤起搜索）。 */}
       {collapsed ? (
         <div className="flex flex-col items-center gap-2 px-3 pb-3 pt-5">
-          <span className="brand-badge flex size-8 items-center justify-center rounded-[10px]">
-            <SparkIcon className="size-[18px]" />
-          </span>
+          <Image
+            src="/movieclaw-logo-mark-rotor.png"
+            alt="MovieClaw"
+            width={525}
+            height={525}
+            priority
+            className="size-9 object-contain"
+          />
           <CollapseToggle collapsed onClick={onToggleCollapse} />
           <SearchCommand onSearch={onSearch} />
         </div>
       ) : (
-        <div className="flex items-center justify-between px-4 pb-3 pt-5">
-          <div className="flex items-center gap-2.5">
-            <span className="brand-badge flex size-8 items-center justify-center rounded-[10px]">
-              <SparkIcon className="size-[18px]" />
-            </span>
-            <span className="text-[15px] font-bold tracking-[0.02em]">
-              movie<span className="text-[var(--accent-2)]">claw</span>
-            </span>
-          </div>
+        <div className="flex items-center justify-between px-4 pb-3 pt-4">
+          <Image
+            src="/movieclaw-logo-rotor.png"
+            alt="MovieClaw"
+            width={1920}
+            height={525}
+            priority
+            className="h-9 w-auto max-w-[132px] object-contain"
+          />
           <div className="flex items-center gap-1">
             <SearchCommand onSearch={onSearch} />
             <CollapseToggle collapsed={false} onClick={onToggleCollapse} />

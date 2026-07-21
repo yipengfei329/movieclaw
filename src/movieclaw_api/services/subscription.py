@@ -271,6 +271,7 @@ class SubscriptionService:
             "开" if follow_future else "关",
             len(units),
         )
+        self._kick_search()
         return subscription
 
     # ------------------------------------------------------------------
@@ -376,11 +377,86 @@ class SubscriptionService:
             len(to_add),
             len(to_remove),
         )
+        if to_add:
+            self._kick_search()  # diff 可能补了新的补旧工单，同样立即发车
         return subscription
 
     # ------------------------------------------------------------------
     # 状态操作与查询
     # ------------------------------------------------------------------
+
+    async def redownload_missing_units(
+        self,
+        kind: MediaKind,
+        item: MediaItem,
+        units: set[tuple[int, int]],
+        *,
+        library_id: int | None = None,
+    ) -> tuple[Subscription, int]:
+        """把媒体库缺失的单元重新交给订阅管线补回（缺失清单的「重新下载」）。
+
+        与 update 的 diff 铁律（已 grabbed/imported 一律保留、绝不重复下载）
+        刻意相反：这里用户明确表达了"文件没了，再下一次"，缺失单元的既有
+        终态工单要显式重置回 wanted 并立即排队搜索；没有工单的补建。
+        无订阅时按缺失季创建（create 的初始工单生成会跳过在位文件，
+        生成范围恰好覆盖缺失单元）。返回 (订阅, 重新排队的工单数)。
+        """
+        assert item.id is not None
+        existing = await self._repo.get_by_media_item(item.id)
+        if existing is None:
+            seasons = (
+                sorted({s for s, _ in units if s > 0}) if kind is MediaKind.TV else None
+            )
+            subscription = await self.create(
+                kind, item.tmdb_id, selected_seasons=seasons, library_id=library_id
+            )
+            return subscription, len(units)
+
+        subscription = existing
+        assert subscription.id is not None
+        if kind is MediaKind.TV:
+            # 缺失季并入勾选季：update 会为新入域且无工单的单元补工单
+            merged = sorted(set(subscription.selected_seasons) | {s for s, _ in units if s > 0})
+            if merged != sorted(subscription.selected_seasons):
+                subscription = await self.update(subscription.id, selected_seasons=merged)
+                assert subscription.id is not None
+
+        wanted = await self._repo.list_wanted(subscription.id)
+        by_key = {(w.season_number, w.episode_number): w for w in wanted}
+        requeued = 0
+        now = utcnow()
+        for unit in units:
+            row = by_key.get(unit)
+            if row is None:
+                # 有订阅但该单元从未有工单（订阅创建时文件在位被跳过）→ 补建
+                await self._repo.add_wanted(
+                    [self._to_wanted(subscription, ExpectedUnit(unit[0], unit[1], None))]
+                )
+                requeued += 1
+                continue
+            if row.status == WantedStatus.WANTED:
+                continue  # 本来就在队列里，别清人家的搜索退避
+            row.status = WantedStatus.WANTED
+            row.info_hash = None
+            row.grabbed_at = None
+            row.downloaded_at = None
+            row.imported_at = None
+            row.search_attempts = 0
+            row.last_search_at = None
+            row.next_search_at = now  # 补旧语义：立即排队真实搜索
+            self._session.add(row)
+            requeued += 1
+        if requeued:
+            await self._log(
+                subscription,
+                ActivityType.ADJUSTED,
+                f"媒体库文件缺失，重新下载：{requeued} 个工单重新排队",
+                payload={"requeued_units": sorted(units)},
+            )
+            item_row = await self._media_repo_get(subscription.media_item_id)
+            await self._recompute_status(subscription, item_row)
+            self._kick_search()
+        return subscription, requeued
 
     async def set_paused(self, subscription_id: int, paused: bool) -> Subscription:
         """暂停/恢复。暂停是用户显式状态；恢复后由派生重算落到 active/completed。"""
@@ -399,6 +475,7 @@ class SubscriptionService:
         await self._log(subscription, ActivityType.RESUMED, "已恢复追踪")
         item = await self._media_repo_get(subscription.media_item_id)
         await self._recompute_status(subscription, item)
+        self._kick_search()  # 暂停期间积压的到期工单立即处理
         return subscription
 
     async def delete(self, subscription_id: int) -> None:
@@ -519,6 +596,17 @@ class SubscriptionService:
     # ------------------------------------------------------------------
     # 内部
     # ------------------------------------------------------------------
+
+    def _kick_search(self) -> None:
+        """产生了"立刻可搜"的工单后立即踢一次缺口搜索。
+
+        收口在 service 层：任何入口（HTTP 路由、媒体库缺失重下、未来的
+        agent 工具等）只要走本服务的写方法，就自动获得"创建即搜"语义，
+        不依赖调用方自觉。延迟导入避免与搜索管线形成环。
+        """
+        from movieclaw_api.services.wanted_search import kick_search_soon
+
+        kick_search_soon()
 
     async def _owned_units(self, media_item_id: int) -> set[tuple[int, int]]:
         """库存 H：该条目在媒体库里已拥有的期望单元（媒体库 L3 联通）。"""

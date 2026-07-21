@@ -3,13 +3,16 @@
 识别链（docs/design/library.md M2，每个视频文件依次尝试）：
   ① NFO 优先——存量目录常有 Emby/TMM 刮削好的 NFO（内含 tmdb id），
      读到即免费精确身份；
-  ② 文件名/目录名解析（enrich 复用）→ TMDB 标题+年份保守收敛
-     （唯一命中才认，规则同豆瓣入口的 resolve）；
+  ② 文件名/目录名解析（enrich 复用）→ TMDB 证据验证收敛
+     （标题门槛 + 年份/时长/季集数佐证，见 library_resolve 模块头注释）；
   ③ 仍无法确认 → 照样落账但 media_item_id=NULL，进"待识别"清单人工认领
      ——宁可待确认，不静默错挂。
 
 增量语义：已在台账且在位的路径直接跳过（重扫秒级）；标记过 missing 的
-文件再次被发现时自动清除标记。扫描绝不移动/重命名/删除任何存量文件。
+文件再次被发现时自动清除标记。扫描同时感知删除：在位根路径下、台账有
+但本轮没遍历到的文件标记 missing（挂载失败的根整个跳过、不误伤）——
+"扫描 = 把台账与磁盘对齐"，新增与消失一次看全。扫描绝不移动/重命名/
+删除任何存量文件，missing 只是标记、记录永远保留。
 
 改名归并：磁盘上被改名/移动的文件（旧路径消失 + 新路径出现）在落账前
 用"尺寸 + 时长"指纹匹配旧行，唯一命中即整行随迁——身份锚（含人工
@@ -27,15 +30,19 @@ from pathlib import Path
 from sqlmodel import select
 
 from movieclaw_api.services.library_import import VIDEO_EXTS
+from movieclaw_api.services.library_resolve import (
+    LocalEvidence,
+    parse_total_episodes,
+    verify_resolve,
+)
 from movieclaw_api.services.media_discover import get_tmdb_client
 from movieclaw_api.services.media_library import MediaLibraryService
 from movieclaw_api.services.media_probe import probe_media
 from movieclaw_db.engine import get_database
-from movieclaw_db.models import FileSource, Library, LibraryFile, MediaItem, utcnow
+from movieclaw_db.models import DownloadHint, FileSource, Library, LibraryFile, MediaItem, utcnow
 from movieclaw_db.models.scheduled_task import TriggerType
 from movieclaw_db.repositories.library_file_repo import LibraryFileRepository
 from movieclaw_enrich import enrich
-from movieclaw_media.library import ResolveStatus, resolve_douban_to_tmdb
 from movieclaw_media.models import MediaKind
 from movieclaw_scheduler.registry import register_task
 
@@ -56,6 +63,11 @@ _NFO_UNIQUEID = re.compile(r'<uniqueid[^>]*type="tmdb"[^>]*>\s*(\d+)\s*</uniquei
 
 # 同一时间每个库只允许一个扫描在跑（进程内互斥）
 _scanning: set[int] = set()
+# 每库最近一次扫描的结论（进程内即可：给前端"扫描完成了什么"的反馈——
+# 扫描常常毫秒级结束，没有这份记录用户会以为点了没反应）
+_last_scans: dict[int, tuple] = {}
+# 扫描进行中的实时进度 (已处理, 总数)：前端轮询后在库封面上画进度环
+_progress: dict[int, tuple[int, int]] = {}
 
 
 @dataclass
@@ -68,11 +80,22 @@ class ScanSummary:
     unidentified: int = 0  # 落账但待识别
     relinked: int = 0  # 改名归并：旧台账行迁到新路径（身份延续，不算新入账）
     skipped_known: int = 0  # 已在台账、直接跳过
+    marked_missing: int = 0  # 台账有但磁盘上已消失，标记 missing
     errors: list[str] = field(default_factory=list)
 
 
 def is_scanning(library_id: int) -> bool:
     return library_id in _scanning
+
+
+def last_scan(library_id: int) -> tuple | None:
+    """最近一次扫描的 (完成时间, ScanSummary)；该库从未扫描过则为 None。"""
+    return _last_scans.get(library_id)
+
+
+def scan_progress(library_id: int) -> tuple[int, int] | None:
+    """进行中扫描的 (已处理, 总数)；没有扫描在跑则为 None。"""
+    return _progress.get(library_id)
 
 
 async def scan_library(library_id: int) -> ScanSummary:
@@ -90,6 +113,8 @@ async def scan_library(library_id: int) -> ScanSummary:
         return summary
     finally:
         _scanning.discard(library_id)
+        _progress.pop(library_id, None)
+        _last_scans[library_id] = (utcnow(), summary)
 
 
 async def _scan(library_id: int, summary: ScanSummary) -> ScanSummary:
@@ -103,46 +128,85 @@ async def _scan(library_id: int, summary: ScanSummary) -> ScanSummary:
         known = {row.file_path: row for row in await repo.list_by_library(library_id)}
         media_service = MediaLibraryService(session, get_tmdb_client())
         kind = MediaKind(library.kind)
-        # 每轮扫描内的收敛缓存：同一部剧几十集只查一次 TMDB
-        resolve_cache: dict[tuple[str, int | None], MediaItem | None] = {}
+        # 每轮扫描内的收敛缓存：同一部剧同一季几十集只查一次 TMDB
+        resolve_cache: dict[tuple, MediaItem | None] = {}
+        # 下载线索：手动下载提交时锚定的「条目目录 → 副标题」（拼音名种子的救赎）
+        hints = await _load_hints(session)
 
+        # 先盘点全部待处理文件（纯目录遍历、很快）：总数定下来，进度才有分母
+        seen_paths: set[str] = set()
+        scanned_roots: list[str] = []
+        pending: list[tuple[Path, Path, bool]] = []  # (根, 文件, 是否原盘)
         for root in library.root_paths:
             root_path = Path(root)
             if not root_path.exists():
                 summary.errors.append(f"根路径不存在，已跳过：{root}")
                 continue
+            scanned_roots.append(str(root_path))
             for file, is_disc in _walk_videos(root_path):
-                path_str = str(file)
-                existing = known.get(path_str)
-                if existing is not None and existing.missing_since is None:
-                    summary.skipped_known += 1
-                    continue
-                try:
-                    await _ingest_file(
-                        session,
-                        repo,
-                        media_service,
-                        library,
-                        kind,
-                        root_path,
-                        file,
-                        resolve_cache,
-                        summary,
-                        is_disc=is_disc,
-                    )
-                except Exception as exc:  # noqa: BLE001 -- 单文件失败不断整轮
-                    logger.exception("扫描文件失败：%s", file)
-                    summary.errors.append(f"「{file.name}」处理失败：{exc}")
+                seen_paths.add(str(file))
+                pending.append((root_path, file, is_disc))
 
+        assert library.id is not None
+        _progress[library.id] = (0, len(pending))
+        for done, (root_path, file, is_disc) in enumerate(pending, start=1):
+            path_str = str(file)
+            existing = known.get(path_str)
+            if existing is not None and existing.missing_since is None:
+                summary.skipped_known += 1
+                _progress[library.id] = (done, len(pending))
+                continue
+            try:
+                await _ingest_file(
+                    session,
+                    repo,
+                    media_service,
+                    library,
+                    kind,
+                    root_path,
+                    file,
+                    resolve_cache,
+                    summary,
+                    is_disc=is_disc,
+                    hint=_hint_for(file, hints),
+                )
+            except Exception as exc:  # noqa: BLE001 -- 单文件失败不断整轮
+                logger.exception("扫描文件失败：%s", file)
+                summary.errors.append(f"「{file.name}」处理失败：{exc}")
+            _progress[library.id] = (done, len(pending))
+
+        # 收尾感知删除：在位根路径下、台账有但本轮没遍历到 → 标记 missing。
+        # 不存在的根整个不参与（挂载失败/掉盘时不误伤），文件回归时
+        # upsert_by_path 会自动清除标记。判定须读行上的当前路径而非快照
+        # 的旧 key：改名归并（_try_relink）会把行迁到本轮刚遍历过的新路径
+        prefixes = [f"{r.rstrip('/')}/" for r in scanned_roots]
+        now = utcnow()
+        for row in known.values():
+            path_str = row.file_path
+            if row.missing_since is not None or path_str in seen_paths:
+                continue
+            if not any(path_str.startswith(prefix) for prefix in prefixes):
+                continue
+            assert row.id is not None
+            await repo.mark_missing(row.id, since=now)
+            summary.marked_missing += 1
+
+    if summary.marked_missing:
+        logger.warning(
+            "媒体库 #%s：%d 个文件已不在原位，已标记 missing（记录保留，文件回归自动恢复）",
+            library_id,
+            summary.marked_missing,
+        )
     logger.info(
         "媒体库 #%s 扫描完成：新入账 %d（已识别 %d / 待识别 %d），"
-        "改名归并 %d，跳过已知 %d，问题 %d",
+        "改名归并 %d，跳过已知 %d，标记丢失 %d，问题 %d",
         library_id,
         summary.scanned - summary.relinked,
         summary.identified,
         summary.unidentified,
         summary.relinked,
         summary.skipped_known,
+        summary.marked_missing,
         len(summary.errors),
     )
     return summary
@@ -220,6 +284,7 @@ async def _ingest_file(
     summary: ScanSummary,
     *,
     is_disc: bool = False,
+    hint: _SubtitleHint | None = None,
 ) -> None:
     summary.scanned += 1
     # 先探测：实测时长是电影同名候选消歧的强信号（原盘探测其主流文件）
@@ -252,6 +317,7 @@ async def _ingest_file(
         file,
         resolve_cache,
         duration_seconds=spec.duration_seconds if spec else None,
+        hint=hint,
     )
     season, episode = (0, 0) if is_disc else _unit_for(kind, file)
     attrs = enrich(file.stem if not is_disc else file.name)
@@ -341,6 +407,40 @@ async def _try_relink(
 # ---------------------------------------------------------------------------
 
 
+@dataclass
+class _SubtitleHint:
+    """``download_hint`` 行的解析形态（每轮扫描解析一次，同目录多文件复用）。"""
+
+    save_path: str
+    alt_title: str | None  # 副标题里的中文片名（enrich 提取）
+    total_episodes: int | None  # 副标题「全N集」
+
+
+async def _load_hints(session) -> list[_SubtitleHint]:
+    """加载并解析全部下载线索；最长路径在前，嵌套目录时取最具体的一条。"""
+    rows = list((await session.execute(select(DownloadHint))).scalars().all())
+    hints = []
+    for row in rows:
+        attrs = enrich(row.subtitle)
+        hints.append(
+            _SubtitleHint(
+                save_path=row.save_path.rstrip("/"),
+                alt_title=attrs.titles_zh[0] if attrs.titles_zh else None,
+                total_episodes=parse_total_episodes(row.subtitle),
+            )
+        )
+    hints.sort(key=lambda h: len(h.save_path), reverse=True)
+    return hints
+
+
+def _hint_for(file: Path, hints: list[_SubtitleHint]) -> _SubtitleHint | None:
+    """文件落在某条线索的目录之下 → 该线索适用（列表已按最具体优先排序）。"""
+    for hint in hints:
+        if Path(hint.save_path) in file.parents:
+            return hint
+    return None
+
+
 async def _identify(
     media_service: MediaLibraryService,
     kind: MediaKind,
@@ -349,6 +449,7 @@ async def _identify(
     cache: dict,
     *,
     duration_seconds: int | None = None,
+    hint: _SubtitleHint | None = None,
 ) -> MediaItem | None:
     # ① NFO 精确身份
     tmdb_id = _nfo_tmdb_id(root, file)
@@ -358,99 +459,36 @@ async def _identify(
         except Exception as exc:  # noqa: BLE001 -- NFO 的 id 可能已失效，降级到解析
             logger.warning("NFO 指向的 TMDB 条目建档失败（id=%s）：%s", tmdb_id, exc)
 
-    # ② 名称解析 → TMDB 保守收敛（电影歧义时用实测时长消歧）
-    title, year = _guess_title(kind, root, file)
-    if not title:
+    # ② 名称解析 → TMDB 证据验证收敛（年份/时长/季集数佐证见 library_resolve）
+    evidence = _guess_evidence(kind, root, file)
+    # 下载线索补强：副标题中文名作备选查询词，「全N集」作集数佐证；
+    # 文件/目录名完全解析不出条目名时，中文名直接顶为主查询词
+    if hint is not None:
+        if evidence is None:
+            if hint.alt_title:
+                evidence = LocalEvidence(title=hint.alt_title)
+        else:
+            evidence.alt_title = hint.alt_title
+        if evidence is not None:
+            evidence.total_episodes = hint.total_episodes
+    if evidence is None:
         return None
-    key = (title, year)
+    evidence.duration_seconds = duration_seconds
+    key = (evidence.title, evidence.alt_title, evidence.year, evidence.season)
     if key in cache:
         return cache[key]
     try:
-        resolution, item = await _resolve(
-            media_service, kind, title, year, duration_seconds=duration_seconds
+        tmdb_id = await verify_resolve(get_tmdb_client(), kind, evidence)
+        item = (
+            await media_service.ensure_media_item(kind, tmdb_id, extra_aliases=[])
+            if tmdb_id is not None
+            else None
         )
     except Exception as exc:  # noqa: BLE001 -- TMDB 波动不该中断扫描
-        logger.warning("TMDB 收敛失败（%s / %s）：%s", title, year, exc)
+        logger.warning("TMDB 收敛失败（%s / %s）：%s", evidence.title, evidence.year, exc)
         return None
-    if resolution is not ResolveStatus.MATCHED:
-        item = None
     cache[key] = item
     return item
-
-
-async def _resolve(
-    media_service: MediaLibraryService,
-    kind: MediaKind,
-    title: str,
-    year: int | None,
-    *,
-    duration_seconds: int | None = None,
-) -> tuple[ResolveStatus, MediaItem | None]:
-    """标题+年份 → TMDB 锚，但比豆瓣入口**更保守**。
-
-    豆瓣入口的查询词是用户输入的真实片名，"搜索结果唯一即命中"够用；
-    扫描器的查询词来自任意文件/目录名（可能是"杂物"这类噪声），TMDB 的
-    模糊搜索对噪声词也可能返回唯一但错误的结果。因此追加验收：
-    **没有年份佐证时，命中条目的标题/原名/别名必须与查询词精确相等**，
-    否则宁可进待识别清单（不静默错挂铁律）。
-    """
-    resolution = await resolve_douban_to_tmdb(get_tmdb_client(), kind, title, year=year)
-    if resolution.status is ResolveStatus.AMBIGUOUS and (
-        kind is MediaKind.MOVIE and duration_seconds
-    ):
-        # 时长消歧（文件识别独有的强信号）：实测时长 × 候选 runtime，
-        # ±2 分钟内唯一命中才认——多个都接近仍视为歧义
-        picked = await _pick_by_runtime(resolution.candidates, duration_seconds)
-        if picked is not None:
-            item = await media_service.ensure_media_item(kind, picked)
-            logger.info(
-                "时长消歧命中：「%s」（%d 分钟）→《%s》",
-                title,
-                duration_seconds // 60,
-                item.title,
-            )
-            return ResolveStatus.MATCHED, item
-    if resolution.status is not ResolveStatus.MATCHED:
-        return resolution.status, None
-    assert resolution.tmdb_id is not None
-    item = await media_service.ensure_media_item(kind, resolution.tmdb_id, extra_aliases=[])
-    if year is None and not _title_matches(title, item):
-        logger.info(
-            "扫描收敛被否决：查询「%s」命中《%s》但标题不符且无年份佐证，进待识别",
-            title,
-            item.title,
-        )
-        return ResolveStatus.AMBIGUOUS, None
-    return ResolveStatus.MATCHED, item
-
-
-# 时长消歧参数：±2 分钟容差；最多查前 5 个候选的详情（限流友好）
-_RUNTIME_TOLERANCE_SECONDS = 120
-_RUNTIME_CANDIDATES_MAX = 5
-
-
-async def _pick_by_runtime(candidates, duration_seconds: int) -> int | None:
-    """逐候选拉 TMDB runtime，与实测时长比对；唯一落在容差内的候选胜出。"""
-    client = get_tmdb_client()
-    hits: list[int] = []
-    for candidate in candidates[:_RUNTIME_CANDIDATES_MAX]:
-        try:
-            detail = await client.get(f"movie/{candidate.tmdb_id}", {})
-        except Exception:  # noqa: BLE001 -- 单候选拉取失败按不命中处理
-            continue
-        runtime = detail.get("runtime")
-        if not runtime:
-            continue
-        if abs(runtime * 60 - duration_seconds) <= _RUNTIME_TOLERANCE_SECONDS:
-            hits.append(candidate.tmdb_id)
-    return hits[0] if len(hits) == 1 else None
-
-
-def _title_matches(query: str, item: MediaItem) -> bool:
-    """查询词与条目名精确相等（大小写不敏感；主名/原名/别名任一即可）。"""
-    normalized = query.strip().casefold()
-    names = [item.title, item.original_title, *item.aliases]
-    return any(normalized == (name or "").strip().casefold() for name in names)
 
 
 def _nfo_tmdb_id(root: Path, file: Path) -> int | None:
@@ -476,11 +514,14 @@ def _nfo_tmdb_id(root: Path, file: Path) -> int | None:
     return None
 
 
-def _guess_title(kind: MediaKind, root: Path, file: Path) -> tuple[str | None, int | None]:
-    """猜条目名：剧集优先用"剧集目录名"（比文件名干净），电影优先用文件名。
+def _guess_evidence(kind: MediaKind, root: Path, file: Path) -> LocalEvidence | None:
+    """收集本地识别证据：条目名/年份 + 剧集的季集号（供收敛验证器佐证）。
 
+    条目名：剧集优先用"剧集目录名"（比文件名干净），电影优先用文件名；
     目录结构 ``{root}/{条目目录}[/Season NN]/文件`` 中，条目目录是紧挨
-    库根的那一层；散落在库根下的裸文件退回用文件名解析。
+    库根的那一层，散落在库根下的裸文件退回用文件名解析。
+    季集号：目录名与文件名两个来源合并取最大（季包目录带 SNN、文件名带
+    SxxExx，各有一半信息）；S00 特别篇不计入季数证据。
     """
     entry_dir = _entry_dir(root, file)
     sources = []
@@ -492,18 +533,29 @@ def _guess_title(kind: MediaKind, root: Path, file: Path) -> tuple[str | None, i
         sources.append(file.stem)
         if entry_dir is not None:
             sources.append(entry_dir.name)
-    for text in sources:
-        attrs = enrich(text)
+    parsed = [enrich(text) for text in sources]
+
+    evidence: LocalEvidence | None = None
+    for text, attrs in zip(sources, parsed, strict=True):
         title = (attrs.titles_zh[0] if attrs.titles_zh else None) or (
             attrs.titles_en[0] if attrs.titles_en else None
         )
         if title:
-            return title, attrs.year
+            evidence = LocalEvidence(title=title, year=attrs.year)
+            break
         # enrich 抽不出时退回"Title (Year)"目录名惯例
         plain = re.match(r"^(.+?)\s*\((\d{4})\)$", text.strip())
         if plain:
-            return plain.group(1).strip(), int(plain.group(2))
-    return None, None
+            evidence = LocalEvidence(title=plain.group(1).strip(), year=int(plain.group(2)))
+            break
+    if evidence is None:
+        return None
+    if kind is MediaKind.TV:
+        seasons = [s for attrs in parsed for s in attrs.seasons if s > 0]
+        episodes = [e for attrs in parsed for e in attrs.episodes]
+        evidence.season = max(seasons) if seasons else None
+        evidence.episode = max(episodes) if episodes else None
+    return evidence
 
 
 def _entry_dir(root: Path, file: Path) -> Path | None:
@@ -539,10 +591,12 @@ def _season_from_dir(directory: Path) -> int | None:
 
 
 # ---------------------------------------------------------------------------
-# 定期对账（L3.4）：missing 标记 + 新文件补扫
+# 定期对账（L3.4）：兜底巡检
 # ---------------------------------------------------------------------------
 
-# 对账节奏：低频巡检即可（文件消失不是急事；新文件靠手动扫描/入库为主）
+# 对账节奏：低频兜底即可——新增/删除的即时感知靠手动扫描和目录监听
+# （scan_library 本身已同时处理入账与 missing 标记），定时任务只兜底
+# 监听失效（如网络挂载不产生 fs 事件）的场景
 RECONCILE_INTERVAL_SECONDS = 6 * 3600
 
 
@@ -552,8 +606,8 @@ RECONCILE_INTERVAL_SECONDS = 6 * 3600
     trigger_type=TriggerType.INTERVAL,
     interval_seconds=RECONCILE_INTERVAL_SECONDS,
     description=(
-        "定期核对媒体库台账与磁盘：消失的文件标记 missing（不删记录），"
-        "根路径下的新文件增量补扫入账。"
+        "定期把媒体库台账与磁盘对齐：新文件增量入账，消失的文件标记 missing"
+        "（不删记录）。兜底目录监听覆盖不到的场景。"
     ),
 )
 async def reconcile_libraries() -> None:
@@ -562,32 +616,8 @@ async def reconcile_libraries() -> None:
         libraries = list((await session.execute(select(Library))).scalars().all())
     for library in libraries:
         assert library.id is not None
-        await _reconcile_missing(library.id)
-        # 新文件补扫（增量：已知路径直接跳过）
         summary = await scan_library(library.id)
         if summary.errors:
             logger.warning(
                 "媒体库「%s」对账补扫存在问题：%s", library.name, "；".join(summary.errors)
-            )
-
-
-async def _reconcile_missing(library_id: int) -> None:
-    """台账里的文件是否仍在位：消失 → 标记 missing_since（磁盘检查放线程池）。"""
-    db = get_database()
-    async with db.session() as session:
-        repo = LibraryFileRepository(session)
-        rows = await repo.list_by_library(library_id)
-        now = utcnow()
-        marked = 0
-        for row in rows:
-            exists = await asyncio.to_thread(Path(row.file_path).exists)
-            if not exists and row.missing_since is None:
-                assert row.id is not None
-                await repo.mark_missing(row.id, since=now)
-                marked += 1
-        if marked:
-            logger.warning(
-                "媒体库 #%s 对账：%d 个文件已不在原位，已标记 missing（记录保留）",
-                library_id,
-                marked,
             )

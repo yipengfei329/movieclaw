@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from movieclaw_api.exceptions import BadRequestException
@@ -21,7 +21,6 @@ from movieclaw_api.schemas.subscription import (
 from movieclaw_api.services.media_discover import get_tmdb_client
 from movieclaw_api.services.media_library import MediaLibraryService
 from movieclaw_api.services.subscription import SubscriptionService
-from movieclaw_api.services.wanted_search import search_wanted
 from movieclaw_db.engine import get_session
 from movieclaw_media.library import ResolveStatus
 from movieclaw_media.models import MediaKind
@@ -100,11 +99,9 @@ async def prepare_subscription(
 )
 async def create_subscription(
     payload: SubscriptionCreatePayload,
-    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
 ) -> ApiResponse[SubscriptionDetailView]:
-    """创建订阅并**立即**踢一次缺口搜索（响应返回后异步执行，走 worker
-    同一节流闸门）——首班车不用等最多 5 分钟的定时 tick。"""
+    """创建订阅。"立即踢一次缺口搜索"由 service 层统一触发，路由不用管。"""
     service = _service(session)
     subscription = await service.create(
         payload.kind,
@@ -117,7 +114,6 @@ async def create_subscription(
     )
     assert subscription.id is not None
     sub, item, wanted = await service.detail(subscription.id)
-    background_tasks.add_task(search_wanted)
     return ok(
         SubscriptionDetailView.from_detail(sub, item, wanted),
         message="已加入订阅，正在搜索资源",
@@ -175,7 +171,6 @@ async def list_subscription_activities(
 async def update_subscription(
     subscription_id: int,
     payload: SubscriptionUpdatePayload,
-    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
 ) -> ApiResponse[SubscriptionDetailView]:
     service = _service(session)
@@ -187,8 +182,6 @@ async def update_subscription(
         library_id=payload.library_id,
     )
     sub, item, wanted = await service.detail(subscription_id)
-    # diff 可能补了新的补旧工单，同样立即发车
-    background_tasks.add_task(search_wanted)
     return ok(SubscriptionDetailView.from_detail(sub, item, wanted), message="订阅已调整")
 
 
@@ -200,17 +193,12 @@ async def update_subscription(
 async def pause_subscription(
     subscription_id: int,
     payload: SubscriptionPausePayload,
-    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
 ) -> ApiResponse[SubscriptionDetailView]:
     service = _service(session)
     await service.set_paused(subscription_id, payload.paused)
     sub, item, wanted = await service.detail(subscription_id)
-    if payload.paused:
-        message = "已暂停，匹配与搜索将跳过该订阅"
-    else:
-        message = "已恢复追踪"
-        background_tasks.add_task(search_wanted)  # 暂停期间积压的到期工单立即处理
+    message = "已暂停，匹配与搜索将跳过该订阅" if payload.paused else "已恢复追踪"
     return ok(SubscriptionDetailView.from_detail(sub, item, wanted), message=message)
 
 
