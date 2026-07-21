@@ -2,7 +2,8 @@
 
 覆盖：NFO 优先识别、目录名解析 + TMDB 保守收敛、待识别落账（NULL 锚）、
 忽略规则、增量重扫跳过、订阅联通（wanted 跳过库存已有 + prepare 库存概览）、
-对账任务（missing 标记与文件回归清除）。TMDB 为假实现。
+对账任务（missing 标记与文件回归清除）、改名归并（身份随迁/人工认领保留/
+复制与多候选不误并）。TMDB 为假实现。
 """
 
 from __future__ import annotations
@@ -227,3 +228,126 @@ async def test_reconcile_marks_missing_and_rescan_restores(db, tmp_path) -> None
             .one()
         )
         assert row.missing_since is None
+
+
+async def test_scan_relinks_renamed_file(db, tmp_path) -> None:
+    """改名归并：已识别文件在磁盘被改成认不出的名字 → 台账行随迁，身份无损。"""
+    root = _make_tv_library(tmp_path)
+    async with db.session() as session:
+        library = await LibraryRepository(session).create(
+            name="剧集库", kind="tv", root_paths=[str(root)]
+        )
+    await scan_library(library.id)
+
+    old = root / "测试剧集 (2024)" / "Season 01" / "测试剧集.S01E01.1080p.mkv"
+    new = old.with_name("完全认不出的名字.mkv")
+    async with db.session() as session:
+        row = (
+            (await session.execute(select(LibraryFile).where(LibraryFile.file_path == str(old))))
+            .scalars()
+            .one()
+        )
+        old_id, old_item = row.id, row.media_item_id
+        old_unit = (row.season_number, row.episode_number)
+    old.rename(new)
+
+    summary = await scan_library(library.id)
+    assert summary.relinked == 1
+    assert summary.unidentified == 0  # 没有当新文件进待识别
+
+    async with db.session() as session:
+        files = list((await session.execute(select(LibraryFile))).scalars().all())
+        assert len(files) == 3  # 行数不变：没有幽灵行 + 新行
+        moved = next(f for f in files if f.file_path == str(new))
+        assert moved.id == old_id  # 同一行随迁而非重建
+        assert moved.media_item_id == old_item
+        assert (moved.season_number, moved.episode_number) == old_unit
+        assert moved.missing_since is None
+
+
+async def test_scan_relink_preserves_manual_claim(db, tmp_path) -> None:
+    """人工认领过的待识别文件被改名 → 认领成果随行保留，不用重新认领。"""
+    root = _make_tv_library(tmp_path)
+    async with db.session() as session:
+        library = await LibraryRepository(session).create(
+            name="剧集库", kind="tv", root_paths=[str(root)]
+        )
+    await scan_library(library.id)
+
+    from movieclaw_db.repositories.library_file_repo import LibraryFileRepository
+
+    junk = root / "未知内容目录" / "zzqx.mkv"
+    async with db.session() as session:
+        repo = LibraryFileRepository(session)
+        row = (
+            (await session.execute(select(LibraryFile).where(LibraryFile.file_path == str(junk))))
+            .scalars()
+            .one()
+        )
+        media_service = MediaLibraryService(session, _fake_tmdb())
+        item = await media_service.ensure_media_item(MediaKind.TV, 200)
+        await repo.claim_identity(row.id, media_item_id=item.id, season_number=1, episode_number=3)
+
+    junk.rename(junk.with_name("还是认不出的新名字.mkv"))
+    summary = await scan_library(library.id)
+    assert summary.relinked == 1
+
+    async with db.session() as session:
+        moved = (
+            (
+                await session.execute(
+                    select(LibraryFile).where(
+                        LibraryFile.file_path.endswith("还是认不出的新名字.mkv")
+                    )
+                )
+            )
+            .scalars()
+            .one()
+        )
+        assert moved.media_item_id is not None  # 认领结果延续
+        assert (moved.season_number, moved.episode_number) == (1, 3)
+
+
+async def test_scan_copy_is_not_relink(db, tmp_path) -> None:
+    """复制（旧路径仍在磁盘）不是改名：不归并，按新文件落账。"""
+    root = _make_tv_library(tmp_path)
+    async with db.session() as session:
+        library = await LibraryRepository(session).create(
+            name="剧集库", kind="tv", root_paths=[str(root)]
+        )
+    await scan_library(library.id)
+
+    src = root / "测试剧集 (2024)" / "Season 01" / "测试剧集.S01E01.1080p.mkv"
+    copy = src.with_name("副本.mkv")
+    copy.write_bytes(src.read_bytes())
+
+    summary = await scan_library(library.id)
+    assert summary.relinked == 0  # 旧路径仍在磁盘：不是改名，不归并
+
+    async with db.session() as session:
+        files = list((await session.execute(select(LibraryFile))).scalars().all())
+        assert len(files) == 4  # 副本按新文件落了新行（经目录名照常识别）
+        assert {str(src), str(copy)} <= {f.file_path for f in files}
+
+
+async def test_scan_relink_ambiguous_candidates_bail_out(db, tmp_path) -> None:
+    """多个同尺寸旧行都消失时无法确定对应关系：不归并（宁缺毋滥）。"""
+    root = _make_tv_library(tmp_path)
+    async with db.session() as session:
+        library = await LibraryRepository(session).create(
+            name="剧集库", kind="tv", root_paths=[str(root)]
+        )
+    await scan_library(library.id)
+
+    season_dir = root / "测试剧集 (2024)" / "Season 01"
+    # E01/E02 内容同尺寸：一个删除、一个改名 → 新文件对应哪行无法确定
+    (season_dir / "测试剧集.S01E01.1080p.mkv").unlink()
+    (season_dir / "测试剧集.S01E02.1080p.mkv").rename(season_dir / "不知道是哪集.mkv")
+
+    summary = await scan_library(library.id)
+    assert summary.relinked == 0  # 两个候选二义：不归并
+
+    async with db.session() as session:
+        files = list((await session.execute(select(LibraryFile))).scalars().all())
+        # 新文件落新行（经目录名照常识别），两条旧行原地保留（留给对账标记 missing）
+        assert len(files) == 4
