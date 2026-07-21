@@ -103,6 +103,7 @@ class _Candidate:
     season_count: int | None = None
     episode_counts: dict[int, int] = field(default_factory=dict)  # 季号 → 集数
     is_animation: bool = False  # 动画类（TMDB genre 16）：季数反证豁免用
+    detail_loaded: bool = False  # 详情已拉取（并池重裁时不重复请求）
 
 
 async def verify_resolve(
@@ -116,16 +117,55 @@ async def verify_resolve(
 
     主查询词（文件/目录名）全灭且有备选查询词（副标题中文名）时，换词
     重跑一轮完整验证——标题门槛/反证/裁决对备选词同样生效，不降标准。
+
+    换词前先试**降级查询**（500 条批测暴露的两类站点命名噪声，主词失败
+    才触发、完整验证不降标准）：尾部年份拆分（「Police Raid 1947」年份被
+    并进片名，拆出后按年份佐证重验；《Blade Runner 2049》不受影响——它
+    主词直接命中，走不到降级）；整题双写折叠（「Beginners Beginners」是
+    站点生成器把片名写了两遍；《New York, New York》同理主词先命中）。
     """
     picked = await _verify_query(client, kind, evidence, language)
-    if picked is not None or not evidence.alt_title:
+    if picked is not None:
         return picked
+    for degraded, why in _degraded_evidences(evidence):
+        picked = await _verify_query(client, kind, degraded, language)
+        if picked is not None:
+            logger.info(
+                "扫描收敛降级查询命中（%s）：「%s」→「%s」", why, evidence.title, degraded.title
+            )
+            return picked
+    if not evidence.alt_title:
+        return None
     if normalize_title(evidence.alt_title) == normalize_title(evidence.title):
         return None  # 备选词与主词同形，重跑是浪费
     logger.info("扫描收敛换词重试：「%s」→ 副标题中文名「%s」", evidence.title, evidence.alt_title)
     return await _verify_query(
         client, kind, replace(evidence, title=evidence.alt_title, alt_title=None), language
     )
+
+
+# 尾部年份："Police Raid 1947" → 片名 "Police Raid" + 年份 1947
+_TRAILING_YEAR = re.compile(r"^(?P<stem>.*\S)\s+(?P<year>(?:18|19|20)\d{2})$")
+
+
+def _degraded_evidences(evidence: LocalEvidence) -> list[tuple[LocalEvidence, str]]:
+    """主查询词失败后的降级形态（连同触发原因，供日志）。"""
+    spaced = re.sub(r"[._]+", " ", evidence.title).strip()
+    forms: list[tuple[LocalEvidence, str]] = []
+    match = _TRAILING_YEAR.match(spaced)
+    if match:
+        year = int(match.group("year"))
+        if evidence.year in (None, year):
+            forms.append(
+                (replace(evidence, title=match.group("stem"), year=year, alt_title=None), "尾部年份拆分")
+            )
+    tokens = spaced.split()
+    half = len(tokens) // 2
+    if len(tokens) >= 2 and len(tokens) % 2 == 0 and (
+        [t.casefold() for t in tokens[:half]] == [t.casefold() for t in tokens[half:]]
+    ):
+        forms.append((replace(evidence, title=" ".join(tokens[:half]), alt_title=None), "双写折叠"))
+    return forms
 
 
 async def _verify_query(
@@ -139,8 +179,10 @@ async def _verify_query(
     query = re.sub(r"[._]+", " ", evidence.title).strip()
     candidates = await _search_candidates(client, kind, query, language)
     picked = await _verify_pool(client, kind, evidence, candidates, language)
-    if picked is not None or evidence.year is None:
-        return picked
+    if picked is not None:
+        return await _exact_year_recheck(client, kind, evidence, candidates, picked, language)
+    if evidence.year is None:
+        return None
     # 年份补搜：普通搜索按热度排序，冷门正主可能排在前 5 之外（实测案例：
     # 「Berserk 2016」的 2016 版剑风传奇）——带年份参数再捞一轮新候选
     extra = await _search_candidates(client, kind, query, language, year=evidence.year)
@@ -167,6 +209,44 @@ async def _verify_query(
         )
         return None
     return picked_id
+
+
+async def _exact_year_recheck(
+    client: TmdbClient,
+    kind: MediaKind,
+    evidence: LocalEvidence,
+    candidates: list[_Candidate],
+    picked_id: int,
+    language: str,
+) -> int | None:
+    """±1 年命中的精确年复核（Full Contact 1992 错挂 1993 同名美国片的教训）。
+
+    搜索排位噪声可能把「同名且年份精确相等」的正主挤出前 5，让 ±1 年的
+    同名片以唯一幸存者身份被采信。已按非精确年采信时，带精确年补搜一轮：
+    有新候选则并池重裁——精确年正主在"年份精确相等者唯一"一级胜出；
+    并池后产生真歧义则放弃（保守优先）。只对电影生效：剧集的本地年份常是
+    资源发布年，本就只作弱佐证，不值得为它翻案。
+    """
+    if kind is not MediaKind.MOVIE or evidence.year is None:
+        return picked_id
+    picked = next((c for c in candidates if c.tmdb_id == picked_id), None)
+    if picked is None or picked.year == evidence.year:
+        return picked_id
+    query = re.sub(r"[._]+", " ", evidence.title).strip()
+    extra = await _search_candidates(client, kind, query, language, year=evidence.year)
+    known = {c.tmdb_id for c in candidates}
+    fresh = [c for c in extra if c.tmdb_id not in known]
+    if not fresh:
+        return picked_id
+    logger.info(
+        "扫描收敛精确年复核：「%s」(%s) 原命中《%s》(%s)，补搜新增 %d 个精确年候选重裁",
+        evidence.title,
+        evidence.year,
+        picked.title,
+        picked.year,
+        len(fresh),
+    )
+    return await _verify_pool(client, kind, evidence, candidates + fresh, language)
 
 
 async def _search_candidates(
@@ -406,6 +486,8 @@ async def _load_detail(
     client: TmdbClient, kind: MediaKind, candidate: _Candidate, language: str
 ) -> None:
     """拉候选详情补充验证字段；单候选失败按"信息缺失"处理，不中断整体。"""
+    if candidate.detail_loaded:
+        return
     try:
         detail = await client.get(
             f"{kind.value}/{candidate.tmdb_id}",
@@ -414,6 +496,7 @@ async def _load_detail(
     except Exception as exc:  # noqa: BLE001 -- TMDB 波动只降级该候选
         logger.debug("候选详情获取失败（tmdb=%s）：%s", candidate.tmdb_id, exc)
         return
+    candidate.detail_loaded = True
     alt = detail.get("alternative_titles") or {}
     # 电影的别名在 titles，剧集在 results——TMDB 的历史包袱
     for entry in alt.get("titles") or alt.get("results") or []:

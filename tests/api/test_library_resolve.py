@@ -163,6 +163,76 @@ async def test_tv_season_count_discriminates_same_title() -> None:
     assert picked == 30703
 
 
+async def test_movie_trailing_year_degrade() -> None:
+    """Police Raid 1947：年份被并进片名导致搜索零命中，降级拆分后按
+    年份佐证重验命中；Blade Runner 2049 类主词直接命中，走不到降级。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/3/search/movie":
+            if request.url.params.get("query") == "Police Raid":
+                return httpx.Response(
+                    200, json={"results": [_movie(52907, "警方搜捕", "Razzia sur la chnouf", 1947)]}
+                )
+            return httpx.Response(200, json={"results": []})
+        if request.url.path == "/3/movie/52907":
+            return httpx.Response(200, json=_movie_detail(52907, alts=["Police Raid"]))
+        return httpx.Response(404, json={})
+
+    client = TmdbClient(_KEY, transport=httpx.MockTransport(handler))
+    picked = await verify_resolve(
+        client, MediaKind.MOVIE, LocalEvidence(title="Police Raid 1947")
+    )
+    assert picked == 52907
+
+
+async def test_movie_exact_year_recheck_flips_off_by_one() -> None:
+    """Full Contact 1992：正主《侠盗高飞》被搜索排位挤出前 5，同名美国片
+    (1993) 靠年份±1 唯一幸存——精确年复核补搜并池后，精确年正主胜出。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/3/search/movie":
+            if request.url.params.get("primary_release_year") == "1992":
+                return httpx.Response(
+                    200, json={"results": [_movie(27073, "侠盗高飞", "俠盜高飛", 1992)]}
+                )
+            return httpx.Response(
+                200, json={"results": [_movie(269646, "Full Contact", "Full Contact", 1993)]}
+            )
+        details = {
+            "/3/movie/269646": _movie_detail(269646),
+            "/3/movie/27073": _movie_detail(27073, alts=["Full Contact"]),
+        }
+        payload = details.get(request.url.path)
+        return httpx.Response(200 if payload else 404, json=payload or {})
+
+    client = TmdbClient(_KEY, transport=httpx.MockTransport(handler))
+    picked = await verify_resolve(
+        client, MediaKind.MOVIE, LocalEvidence(title="Full Contact", year=1992)
+    )
+    assert picked == 27073
+
+
+async def test_movie_doubled_title_degrade() -> None:
+    """Beginners Beginners：站点生成器把片名写了两遍，主词全灭后折叠重验。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/3/search/movie":
+            if request.url.params.get("query") == "Beginners":
+                return httpx.Response(
+                    200, json={"results": [_movie(55347, "初学者", "Beginners", 2011)]}
+                )
+            return httpx.Response(200, json={"results": []})
+        if request.url.path == "/3/movie/55347":
+            return httpx.Response(200, json=_movie_detail(55347))
+        return httpx.Response(404, json={})
+
+    client = TmdbClient(_KEY, transport=httpx.MockTransport(handler))
+    picked = await verify_resolve(
+        client, MediaKind.MOVIE, LocalEvidence(title="Beginners Beginners", year=2010)
+    )
+    assert picked == 55347
+
+
 async def test_tv_anime_merged_season_exempt() -> None:
     """租借女友 S05：TMDB 把日漫多期合并为 1 季连续编号，动画候选豁免
     季数反证（2026-07 批测暴露的系统性误杀）。"""

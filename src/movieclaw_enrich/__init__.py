@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from movieclaw_enrich.extractors import EXTRACTORS
 from movieclaw_enrich.inference import extract_with_model
@@ -48,7 +49,21 @@ logger = logging.getLogger("movieclaw_enrich")
 #     新增 title_candidates 候选别名字段（TMDB 匹配的降级查询词/漏抽保险层）
 # v9: 模型升级（规范 v11：日韩原名归外文轴 + 剧场版变体注入合成）：合集名
 #     完整抽取治愈，回归 9/15→11/15
-ENRICH_VERSION = 9
+# v10: 主标题粘连预归一（500 条批测错例）："S021080p" 拆成 "S02 1080p"（原样
+#      喂模型会解析出 S80E210 的鬼话）、"Contact1992" 拆出年份
+ENRICH_VERSION = 10
+
+# 场景命名的两类粘连（站点生成器丢空格所致），喂模型前拆开：
+# ① 季号紧贴分辨率："S021080p" → "S02 1080p"
+_GLUED_SEASON_RES = re.compile(r"(?i)(S\d{1,3})(?=(?:480|576|720|1080|2160|4320)[pi]\b)")
+# ② 单词紧贴年份："Contact1992" → "Contact 1992"（后面不能还是数字，避免拆散长号码）
+_GLUED_WORD_YEAR = re.compile(r"([A-Za-z])((?:18|19|20)\d{2})(?!\d)")
+
+
+def _pre_normalize(title: str) -> str:
+    """主标题喂给提取管线前的粘连拆分。只加空格、不删字符，纯字符级安全变换。"""
+    title = _GLUED_SEASON_RES.sub(r"\1 ", title)
+    return _GLUED_WORD_YEAR.sub(r"\1 \2", title)
 
 
 def _has_value(value: object) -> bool:
@@ -79,6 +94,7 @@ def enrich(title: str, subtitle: str = "", category: str | None = None) -> Torre
     :return: 结构化属性；提取不到的字段保持空值。
     """
     # 词表通道：技术字段，双段各跑一遍、主标题优先
+    title = _pre_normalize(title) if title else title
     fields = _extract_all(title) if title else {}
     if subtitle:
         for key, value in _extract_all(subtitle).items():

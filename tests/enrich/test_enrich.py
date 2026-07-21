@@ -266,3 +266,24 @@ class TestPipeline:
         a = enrich("Movie.2023.2160p.WEB-DL.DDP5.1.Atmos.DV.H265-CHDWEB")
         data = a.model_dump(mode="json", exclude_defaults=True)
         assert TorrentAttrs(**data) == a
+
+
+class TestGluedTokens:
+    """站点生成器丢空格的粘连形态（500 条批测错例，v10 预归一）。"""
+
+    def test_glued_season_resolution(self):
+        # "S021080p" 原样喂模型会解析出 S80 的鬼话，预归一拆开后季号正确
+        a = enrich("The Beginning After the End S021080p friDay WEB-DL AAC2.0 H.264-CHDWEB")
+        assert a.seasons == [2]
+        assert a.resolution == "1080p"
+
+    def test_glued_word_year(self):
+        a = enrich("Full Contact1992 BluRay 1080p AVC DTS-HD MA2 0-MTeam")
+        assert a.year == 1992
+        assert "Full Contact" in a.titles_en
+
+    def test_long_numbers_not_split(self):
+        # 后面还是数字时不拆：跟播日期 20260713 不是 "2026 0713"
+        from movieclaw_enrich import _pre_normalize
+
+        assert _pre_normalize("Show Ep07 20260707 HDTV") == "Show Ep07 20260707 HDTV"
