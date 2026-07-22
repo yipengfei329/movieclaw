@@ -434,6 +434,11 @@ async def test_wanted_identity_claim_via_info_hash(db, tmp_path, monkeypatch):
     await ingest_mod._sweep_dir(library, str(watch), "hardlink")  # 下载器确认完成,单轮即处理
     assert (root / "某电影 (2020)" / "某电影 (2020).mkv").read_bytes() == b"video"
 
+    # 库存对账闭环：入库单元关闭了对应工单（订阅止于投递的另一半）
+    async with db.session() as session:
+        wanted = (await session.execute(select(WantedItem))).scalars().one()
+    assert wanted.status == WantedStatus.IMPORTED
+
 
 @pytest.mark.asyncio
 async def test_fallback_only_sweeps_unwatched_dirs(db, tmp_path, monkeypatch):

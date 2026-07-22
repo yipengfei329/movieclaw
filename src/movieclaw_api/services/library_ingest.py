@@ -480,6 +480,10 @@ async def _ingest_entry(
         from movieclaw_api.services.library_nfo import write_entry_nfo
 
         await asyncio.to_thread(write_entry_nfo, Path(dest_dir), item)
+        # 库存对账：新入库的单元关闭对应的订阅工单（订阅止于投递）
+        from movieclaw_api.services.wanted_fulfillment import close_fulfilled_wanted
+
+        await close_fulfilled_wanted(session, item.id)
 
     verb = "硬链接" if strategy == "hardlink" else "复制"
     if imported:

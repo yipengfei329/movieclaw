@@ -642,6 +642,10 @@ async def claim_file(
         season_number=payload.season_number,
         episode_number=payload.episode_number,
     )
+    # 库存对账：认领让单元"在库"成立，关闭对应的订阅工单
+    from movieclaw_api.services.wanted_fulfillment import close_fulfilled_wanted
+
+    await close_fulfilled_wanted(session, item.id)
     return ok({}, message=f"已认领为《{item.title}》")
 
 

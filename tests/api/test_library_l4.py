@@ -1,8 +1,8 @@
 """媒体库 L4 与识别增强的测试。
 
-覆盖：NFO 写出（不覆盖既有）、下载路径映射、媒体服务器通知（成功/未配置/
-失败不抛）、原盘目录识别（BDMV 整体一个条目）、电影时长消歧（歧义候选
-±2 分钟唯一命中）、watchdog 实时监控（文件事件 → 去抖 → 增量扫描）。
+覆盖：NFO 写出（不覆盖既有）、媒体服务器通知（成功/未配置/失败不抛）、
+原盘目录识别（BDMV 整体一个条目）、电影时长消歧（歧义候选 ±2 分钟
+唯一命中）、watchdog 实时监控（文件事件 → 去抖 → 增量扫描）。
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ import movieclaw_api.services.library_scan as scan_mod
 import movieclaw_api.services.library_watch as watch_mod
 import movieclaw_api.services.media_discover as discover_mod
 from movieclaw_api.core.config import get_settings
-from movieclaw_api.services.library_import import _map_download_path
 from movieclaw_api.services.library_nfo import write_entry_nfo
 from movieclaw_api.services.library_scan import scan_library
 from movieclaw_api.services.media_probe import MediaSpec
@@ -105,6 +104,8 @@ async def db(tmp_path, monkeypatch):
     client = _fake_tmdb()
     monkeypatch.setattr(discover_mod, "get_tmdb_client", lambda: client)
     monkeypatch.setattr(scan_mod, "get_tmdb_client", lambda: client)
+    # 测试文件都是刚创建的，关掉"疑似写入中"静默窗口（该行为有专门测试覆盖）
+    monkeypatch.setattr(scan_mod, "NEW_FILE_QUIET_SECONDS", 0)
     yield get_database()
     await dispose_db()
     get_settings.cache_clear()
@@ -136,26 +137,6 @@ def test_write_entry_nfo_and_respect_existing(tmp_path) -> None:
     nfo.write_text("precious", encoding="utf-8")
     write_entry_nfo(entry, item)
     assert nfo.read_text(encoding="utf-8") == "precious"
-
-
-# ---------------------------------------------------------------------------
-# 下载路径映射
-# ---------------------------------------------------------------------------
-
-
-def test_download_path_mapping(monkeypatch) -> None:
-    monkeypatch.setenv(
-        "DOWNLOAD_PATH_MAPPING", "/downloads=>/vol1/dl;/downloads/movies=>/vol2/m;坏条目"
-    )
-    get_settings.cache_clear()
-    try:
-        # 最长前缀优先
-        assert str(_map_download_path("/downloads/movies/x")) == "/vol2/m/x"
-        assert str(_map_download_path("/downloads/tv/y")) == "/vol1/dl/tv/y"
-        # 无匹配原样返回
-        assert str(_map_download_path("/other")) == "/other"
-    finally:
-        get_settings.cache_clear()
 
 
 # ---------------------------------------------------------------------------

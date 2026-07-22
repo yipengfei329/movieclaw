@@ -417,6 +417,12 @@ async def _ingest_file(
     )
     if item is not None:
         summary.identified += 1
+        # 库存对账：新入账的单元关闭对应的订阅工单（订阅止于投递，
+        # 完成状态由库存推导）
+        from movieclaw_api.services.wanted_fulfillment import close_fulfilled_wanted
+
+        assert item.id is not None
+        await close_fulfilled_wanted(session, item.id)
     else:
         summary.unidentified += 1
 

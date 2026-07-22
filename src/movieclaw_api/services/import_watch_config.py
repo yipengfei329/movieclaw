@@ -136,6 +136,29 @@ class ImportWatchConfigService:
         return source, library
 
 
+async def resolve_dispatch_dir(session: AsyncSession, library_id: int | None) -> str | None:
+    """投递目录：目标库的首条监听导入规则的源目录；没有规则返回 None。
+
+    订阅/手动下载止于投递——把种子投到会被监听导入接管的目录（分离布局），
+    或不指定目录退下载器默认（用户想原地入库就把下载器默认目录设在库根，
+    库扫描接管）。多条规则指向同一库时取最早创建的一条。
+    """
+    if library_id is None:
+        return None
+    rule = (
+        (
+            await session.execute(
+                select(ImportWatch)
+                .where(ImportWatch.library_id == library_id)
+                .order_by(ImportWatch.id)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    return rule.source_path if rule else None
+
+
 async def _refresh_watcher() -> None:
     """规则变更后重建监听（监听器未启动时为 no-op）。"""
     from movieclaw_api.services.library_ingest import get_ingest_watcher

@@ -1,33 +1,29 @@
-"""下载完成检测与入库整理（媒体库 L2 的调度入口）。
+"""投递救援巡检：照看订阅在途投递的种子，只救援、不搬运。
 
-定时任务：把 grabbed/downloaded 且带 infohash 的工单按种子分组，逐个查询
-下载器进度——
+订阅止于投递（架构定稿）：投递记下 info_hash 后，下载完成的搬运由
+监听导入（按 info_hash 认领身份）或库扫描（原地入账）完成，工单的
+完成状态由库存对账关闭（wanted_fulfillment）。本任务只剩投递方
+自己的责任——**照看投递结果的死活**：
 
-  grabbed ──下载器确认完成──→ downloaded ──整理器硬链+落账──→ imported
+- 种子在所有可用下载器中都查不到（被手动删除）→ 工单退回 wanted
+  短冷却后重新找资源；
+- 种子长期（STALLED_REQUEUE_DAYS）未完成 → 视为卡死，退回重新找
+  资源（旧种子若之后完成，库存对账照样关闭工单，不冲突）；
+- 其余情况（下载中/已完成待入库）不做任何事。
 
-失败语义：
-- 种子在所有可用下载器中都查不到（被手动删除）→ 工单退回 wanted 短冷却
-  后重新找资源，并记中文活动说明；
-- 整理失败（无库/跨盘/路径不可达）→ 记 IMPORT_FAILED 活动，指数退避重试，
-  文件滞留下载区绝不误删。
+失败语义沿用：每组独立处理，单组失败不拖垮整轮，中文活动可回放。
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import time
+from datetime import timedelta
 
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from movieclaw_api.services.library_import import (
-    ImportOutcome,
-    LibraryImportError,
-    import_completed_torrent,
-)
-from movieclaw_api.services.subscription import recompute_subscription_status
 from movieclaw_db.engine import get_database
 from movieclaw_db.models import (
     ActivityType,
@@ -48,29 +44,31 @@ from movieclaw_scheduler.registry import register_task
 
 logger = logging.getLogger("movieclaw_api.download_progress")
 
-# 轮询节奏：下载耗时以分钟/小时计，60 秒足够灵敏且对下载器无压力
-PROGRESS_TICK_SECONDS = 60
+# 巡检节奏：救援不追求秒级——5 分钟内发现"种子被删"足够灵敏
+PROGRESS_TICK_SECONDS = 300
 
 # 种子被手动删除后工单退回 wanted 的冷却（给用户留出"删错了重新添加"的窗口）
 _MISSING_RETRY_MINUTES = 30
 
-# 整理失败的指数退避：5 分钟起，翻倍至 2 小时封顶。key=info_hash，
-# 进程内存即可（重启后立即重试一次是无害且合理的）
-_import_backoff: dict[str, tuple[float, float]] = {}
-_BACKOFF_INITIAL = 300.0
-_BACKOFF_MAX = 7200.0
+# 卡死判定：投递后超过该天数仍未下载完成，退回重新找资源（大体积慢速种子
+# 也少有超过一周的；判错的代价只是多找一个候选，旧种子完成后照样入库）
+STALLED_REQUEUE_DAYS = 7
 
 _tick_lock = asyncio.Lock()
+
+# 在途状态：GRABBED 为主；DOWNLOADED 是旧版管线的遗留中间态（新架构不再
+# 写入），存量行按同样语义照看直至库存对账关闭
+_IN_FLIGHT = (WantedStatus.GRABBED, WantedStatus.DOWNLOADED)
 
 
 @register_task(
     "check_download_progress",
-    title="下载完成检测与入库",
+    title="投递救援巡检",
     trigger_type=TriggerType.INTERVAL,
     interval_seconds=PROGRESS_TICK_SECONDS,
     description=(
-        "轮询下载器中订阅投递的种子：下载完成的推进工单状态，并触发整理器"
-        "把文件硬链进媒体库（规范命名 + 介质探测 + 台账落账）。"
+        "照看订阅在途投递的种子：被手动删除或长期卡死的工单退回重新找资源。"
+        "下载完成后的入库由监听导入/库扫描完成，工单由库存对账关闭。"
     ),
 )
 async def check_download_progress() -> None:
@@ -82,22 +80,22 @@ async def check_download_progress() -> None:
                 return
             downloaders = await _usable_downloaders(session)
         if not downloaders:
-            logger.warning("有 %d 个种子等待完成检测，但没有可用的下载器", len(groups))
+            logger.warning("有 %d 个在途种子等待照看，但没有可用的下载器", len(groups))
             return
         for subscription_id, info_hash in groups:
             try:
-                await _process_group(subscription_id, info_hash, downloaders)
+                await _rescue_group(subscription_id, info_hash, downloaders)
             except Exception:  # noqa: BLE001 -- 单组失败不拖垮整轮
-                logger.exception("种子 %s（订阅 #%s）的完成检测失败", info_hash, subscription_id)
+                logger.exception("种子 %s（订阅 #%s）的救援巡检失败", info_hash, subscription_id)
 
 
 async def _pipeline_groups(
     session: AsyncSession,
 ) -> dict[tuple[int, str], list[WantedItem]]:
-    """管线中的工单，按（订阅, 种子）分组。"""
+    """在途工单，按（订阅, 种子）分组。"""
     result = await session.execute(
         select(WantedItem).where(
-            WantedItem.status.in_([WantedStatus.GRABBED, WantedStatus.DOWNLOADED]),  # type: ignore[attr-defined]
+            WantedItem.status.in_(_IN_FLIGHT),  # type: ignore[attr-defined]
             WantedItem.info_hash.is_not(None),  # type: ignore[union-attr]
         )
     )
@@ -150,7 +148,7 @@ async def _query_torrent(
     return None
 
 
-async def _process_group(
+async def _rescue_group(
     subscription_id: int,
     info_hash: str,
     downloaders: list[tuple[DownloaderClient, DownloaderConfig]],
@@ -158,16 +156,14 @@ async def _process_group(
     status = await _query_torrent(info_hash, downloaders)
     db = get_database()
     async with db.session() as session:
-        # 组内工单在会话内重取，避免跨会话对象失效
+        # 组内工单在会话内重取（库存对账可能刚关闭了其中一部分）
         rows = list(
             (
                 await session.execute(
                     select(WantedItem).where(
                         WantedItem.subscription_id == subscription_id,
                         WantedItem.info_hash == info_hash,
-                        WantedItem.status.in_(  # type: ignore[attr-defined]
-                            [WantedStatus.GRABBED, WantedStatus.DOWNLOADED]
-                        ),
+                        WantedItem.status.in_(_IN_FLIGHT),  # type: ignore[attr-defined]
                     )
                 )
             )
@@ -184,52 +180,63 @@ async def _process_group(
         repo = SubscriptionRepository(session)
 
         if status is None:
-            await _handle_missing(session, repo, subscription, item, rows, info_hash)
-            return
-        if not status.completed:
-            logger.debug(
-                "《%s》的种子 %s 下载中：%.1f%%", item.title, info_hash, status.progress * 100
+            await _requeue(
+                session,
+                repo,
+                item,
+                rows,
+                info_hash,
+                message=(
+                    f"投递的种子已不在下载器中（可能被手动删除），"
+                    f"{_MISSING_RETRY_MINUTES} 分钟后重新寻找资源"
+                ),
+                reason="torrent_missing",
             )
             return
 
-        # ① grabbed → downloaded（首次确认完成时记一条活动）
-        newly_downloaded = [w for w in rows if w.status == WantedStatus.GRABBED]
-        if newly_downloaded:
-            now = utcnow()
-            for w in newly_downloaded:
-                await session.execute(
-                    update(WantedItem)
-                    .where(WantedItem.id == w.id, WantedItem.status == WantedStatus.GRABBED)
-                    .values(status=WantedStatus.DOWNLOADED, downloaded_at=now, updated_at=now)
-                )
-            await session.commit()
-            await repo.add_activity(
-                SubscriptionActivity(
-                    subscription_id=subscription_id,
-                    wanted_item_id=rows[0].id,
-                    type=ActivityType.DOWNLOADED,
-                    message=f"下载完成：「{status.name}」，开始整理入库",
-                    payload={"info_hash": info_hash},
-                )
+        if not status.completed and _stalled(rows):
+            await _requeue(
+                session,
+                repo,
+                item,
+                rows,
+                info_hash,
+                message=(
+                    f"「{status.name}」投递超过 {STALLED_REQUEUE_DAYS} 天仍未下载完成，"
+                    "退回重新寻找资源（原种子保留在下载器中，完成后仍会自动入库）"
+                ),
+                reason="stalled",
             )
-            logger.info("《%s》的种子已下载完成：%s", item.title, status.name)
+            return
 
-        # ② downloaded → imported（整理器；失败退避重试）
-        await _try_import(session, repo, subscription, item, rows, info_hash, status)
+        # 下载中/已完成待入库：不做任何事——完成后的搬运由监听导入/库扫描
+        # 负责，工单由库存对账关闭
+        logger.debug(
+            "《%s》的种子 %s：%s",
+            item.title,
+            info_hash,
+            "已完成待入库" if status.completed else "下载中",
+        )
 
 
-async def _handle_missing(
+def _stalled(rows: list[WantedItem]) -> bool:
+    """整组工单是否已卡死：以最近一次状态推进的时间为基准。"""
+    threshold = utcnow() - timedelta(days=STALLED_REQUEUE_DAYS)
+    return all((w.grabbed_at or w.updated_at) < threshold for w in rows)
+
+
+async def _requeue(
     session: AsyncSession,
     repo: SubscriptionRepository,
-    subscription: Subscription,
     item: MediaItem,
     rows: list[WantedItem],
     info_hash: str,
+    *,
+    message: str,
+    reason: str,
 ) -> None:
-    """种子从下载器消失：退回 wanted 冷却后重新找资源。"""
+    """把一组在途工单退回 wanted：冷却后重新找资源，记中文活动。"""
     now = utcnow()
-    from datetime import timedelta
-
     retry_at = now + timedelta(minutes=_MISSING_RETRY_MINUTES)
     for w in rows:
         await session.execute(
@@ -245,121 +252,13 @@ async def _handle_missing(
             )
         )
     await session.commit()
-    _import_backoff.pop(info_hash, None)
-    assert subscription.id is not None
     await repo.add_activity(
         SubscriptionActivity(
-            subscription_id=subscription.id,
+            subscription_id=rows[0].subscription_id,
             wanted_item_id=rows[0].id,
             type=ActivityType.DISPATCH_FAILED,
-            message=(
-                f"投递的种子已不在下载器中（可能被手动删除），"
-                f"{_MISSING_RETRY_MINUTES} 分钟后重新寻找资源"
-            ),
-            payload={"info_hash": info_hash, "reason": "torrent_missing"},
-        )
-    )
-    logger.warning("《%s》的种子 %s 已不在下载器中，工单退回队列", item.title, info_hash)
-
-
-async def _try_import(
-    session: AsyncSession,
-    repo: SubscriptionRepository,
-    subscription: Subscription,
-    item: MediaItem,
-    rows: list[WantedItem],
-    info_hash: str,
-    status: TorrentStatus,
-) -> None:
-    # 退避窗口内不重试（失败活动已记过，避免刷屏）
-    entry = _import_backoff.get(info_hash)
-    if entry and time.monotonic() < entry[0]:
-        return
-    assert subscription.id is not None
-    try:
-        outcome = await import_completed_torrent(
-            session,
-            subscription=subscription,
-            item=item,
-            wanted_rows=rows,
-            status=status,
-        )
-    except LibraryImportError as exc:
-        delay = min(entry[1] * 2 if entry else _BACKOFF_INITIAL, _BACKOFF_MAX)
-        _import_backoff[info_hash] = (time.monotonic() + delay, delay)
-        await repo.add_activity(
-            SubscriptionActivity(
-                subscription_id=subscription.id,
-                wanted_item_id=rows[0].id,
-                type=ActivityType.IMPORT_FAILED,
-                message=f"整理入库失败：{exc}；约 {int(delay // 60)} 分钟后重试",
-                payload={"info_hash": info_hash},
-            )
-        )
-        logger.warning("《%s》整理入库失败：%s", item.title, exc)
-        return
-
-    _import_backoff.pop(info_hash, None)
-    await _finalize_import(session, repo, subscription, item, rows, info_hash, outcome)
-
-
-async def _finalize_import(
-    session: AsyncSession,
-    repo: SubscriptionRepository,
-    subscription: Subscription,
-    item: MediaItem,
-    rows: list[WantedItem],
-    info_hash: str,
-    outcome: ImportOutcome,
-) -> None:
-    """标记工单 imported + 记时间线活动 + 派生重算。"""
-    from movieclaw_api.services.subscription_matching import _units_text
-
-    now = utcnow()
-    covered = [w for w in rows if (w.season_number, w.episode_number) in outcome.imported_units]
-    for w in covered:
-        await session.execute(
-            update(WantedItem)
-            .where(WantedItem.id == w.id)
-            .values(status=WantedStatus.IMPORTED, imported_at=now, updated_at=now)
-        )
-    await session.commit()
-
-    uncovered = [w for w in rows if w not in covered]
-    message = (
-        f"已入库{_units_text(covered) if covered else ''} 到「{outcome.library_name}」"
-        f"：{outcome.target_paths[0] if outcome.target_paths else ''}"
-        + (f" 等 {len(outcome.target_paths)} 个文件" if len(outcome.target_paths) > 1 else "")
-    )
-    if outcome.skipped:
-        message += f"；{len(outcome.skipped)} 个文件未能解析集号，留在下载目录"
-    if uncovered:
-        message += f"；{_units_text(uncovered)}在种子中未找到对应文件"
-    assert subscription.id is not None
-    await repo.add_activity(
-        SubscriptionActivity(
-            subscription_id=subscription.id,
-            wanted_item_id=rows[0].id,
-            type=ActivityType.IMPORTED,
             message=message,
-            payload={
-                "info_hash": info_hash,
-                "library": outcome.library_name,
-                "files": outcome.target_paths,
-                "units": sorted(outcome.imported_units),
-                "skipped": outcome.skipped,
-            },
+            payload={"info_hash": info_hash, "reason": reason},
         )
     )
-    await recompute_subscription_status(session, subscription, item)
-    logger.info(
-        "《%s》%s 已入库「%s」（%d 个文件）",
-        item.title,
-        _units_text(covered) if covered else "",
-        outcome.library_name,
-        len(outcome.target_paths),
-    )
-    # L4：通知媒体服务器刷新（未配置为 no-op；失败只告警不影响入库）
-    from movieclaw_api.services.media_server_notify import notify_media_server_refresh
-
-    await notify_media_server_refresh()
+    logger.warning("《%s》的种子 %s 已退回队列：%s", item.title, info_hash, reason)
