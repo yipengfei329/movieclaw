@@ -65,6 +65,7 @@ from sqlmodel import select
 
 from movieclaw_api.services.library_config import derive_save_path
 from movieclaw_api.services.library_import import (
+    IN_PROGRESS_MARKERS,
     VIDEO_EXTS,
     _entry_base_name,
 )
@@ -101,22 +102,6 @@ FAILED_RETRY_SECONDS = 3600
 # 下载器种子概览的缓存：一轮事件风暴中的多个目录巡检共享一次 API 调用
 _BRIEFS_TTL_SECONDS = 15.0
 
-# 下载器/浏览器的"未完成"标记（文件名小写后缀匹配）：
-# qBittorrent .!qb、aria2 控制文件 .aria2、Chrome .crdownload、
-# Firefox/迅雷等 .part/.td、BitComet .bc!、通用临时后缀
-_IN_PROGRESS_MARKERS = (
-    ".!qb",
-    ".part",
-    ".aria2",
-    ".crdownload",
-    ".download",
-    ".downloading",
-    ".td",
-    ".bc!",
-    ".tmp",
-    ".temp",
-    ".unfinished",
-)
 # 文件名含这些标记的视频不入库（与入库管线同口径）
 _IGNORE_MARKERS = ("sample",)
 
@@ -160,7 +145,7 @@ def _snapshot(entry: Path) -> _EntrySnapshot:
         count += 1
         max_mtime = max(max_mtime, stat.st_mtime)
         lower = file.name.lower()
-        if any(lower.endswith(marker) for marker in _IN_PROGRESS_MARKERS):
+        if any(lower.endswith(marker) for marker in IN_PROGRESS_MARKERS):
             has_marker = True
             return
         if Path(lower).suffix in VIDEO_EXTS and not any(m in lower for m in _IGNORE_MARKERS):

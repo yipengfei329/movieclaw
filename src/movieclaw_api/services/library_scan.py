@@ -14,6 +14,13 @@
 "扫描 = 把台账与磁盘对齐"，新增与消失一次看全。扫描绝不移动/重命名/
 删除任何存量文件，missing 只是标记、记录永远保留。
 
+完整性检测（库对目录用途不做任何假设——根路径完全可以同时是下载目录，
+新文件可能是一个写入中的半成品）：**新文件 mtime 距今不足静默窗口的
+本轮暂缓入账**（下载器的 .!qB/.part 等未完成后缀本就不是视频扩展名，
+遍历天然不可见）。写入结束后不再有事件叫醒扫描，暂缓过文件的一轮扫描
+会按最近到期时间挂一次性补扫。扫描的角色是盘点不是守门，因此**不做
+ffprobe 门禁**——探测失败的老文件可能只是格式怪，拦下反而让台账失真。
+
 改名归并：磁盘上被改名/移动的文件（旧路径消失 + 新路径出现）在落账前
 用"尺寸 + 时长"指纹匹配旧行，唯一命中即整行随迁——身份锚（含人工
 认领）无损延续，不产生幽灵 missing 行（见 _try_relink）。
@@ -24,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -61,8 +69,14 @@ _SPECIALS_DIR = re.compile(r"^(?:specials?|特别篇|特典)$", re.IGNORECASE)
 _NFO_TMDBID = re.compile(r"<tmdbid>\s*(\d+)\s*</tmdbid>", re.IGNORECASE)
 _NFO_UNIQUEID = re.compile(r'<uniqueid[^>]*type="tmdb"[^>]*>\s*(\d+)\s*</uniqueid>', re.IGNORECASE)
 
+# 新文件的静默窗口：mtime 距今不足该值视为"疑似写入中"，本轮暂缓入账。
+# 只看 mtime 不看大小——BT 客户端预分配全尺寸文件，大小从一开始就不变
+NEW_FILE_QUIET_SECONDS = 300
+
 # 同一时间每个库只允许一个扫描在跑（进程内互斥）
 _scanning: set[int] = set()
+# 暂缓补扫任务：每库至多一个（写入结束后没有事件叫醒扫描，靠它到点补扫）
+_rescan_tasks: dict[int, asyncio.Task] = {}
 # 每库最近一次扫描的结论（进程内即可：给前端"扫描完成了什么"的反馈——
 # 扫描常常毫秒级结束，没有这份记录用户会以为点了没反应）
 _last_scans: dict[int, tuple] = {}
@@ -81,11 +95,31 @@ class ScanSummary:
     relinked: int = 0  # 改名归并：旧台账行迁到新路径（身份延续，不算新入账）
     skipped_known: int = 0  # 已在台账、直接跳过
     marked_missing: int = 0  # 台账有但磁盘上已消失，标记 missing
+    deferred: int = 0  # 疑似写入中（mtime 太新），本轮暂缓入账，稍后自动补扫
     errors: list[str] = field(default_factory=list)
+    # 暂缓文件的最近到期秒数（补扫的等待时长；对外接口不暴露）
+    recheck_delay_seconds: float = 0.0
 
 
 def is_scanning(library_id: int) -> bool:
     return library_id in _scanning
+
+
+def _arm_rescan(library_id: int, delay: float) -> None:
+    """给暂缓过文件的库挂一次性补扫（每库至多一个，落定后自然归零）。"""
+    existing = _rescan_tasks.get(library_id)
+    if existing is not None and not existing.done():
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return  # 无事件循环（同步测试环境等）：由手动扫描/对账兜底
+    _rescan_tasks[library_id] = loop.create_task(_rescan_later(library_id, delay))
+
+
+async def _rescan_later(library_id: int, delay: float) -> None:
+    await asyncio.sleep(delay)
+    await scan_library(library_id)
 
 
 def last_scan(library_id: int) -> tuple | None:
@@ -124,6 +158,9 @@ async def scan_library(library_id: int) -> ScanSummary:
         _scanning.discard(library_id)
         _progress.pop(library_id, None)
         _last_scans[library_id] = (utcnow(), summary)
+        # 暂缓过文件的扫描要自己安排补扫：写入结束后不会再有事件叫醒我们
+        if summary.deferred:
+            _arm_rescan(library_id, summary.recheck_delay_seconds)
 
 
 async def _scan(library_id: int, summary: ScanSummary) -> ScanSummary:
@@ -158,11 +195,28 @@ async def _scan(library_id: int, summary: ScanSummary) -> ScanSummary:
 
         assert library.id is not None
         _progress[library.id] = (0, len(pending))
+        now_ts = time.time()
+        min_remaining: float | None = None
         for done, (root_path, file, is_disc) in enumerate(pending, start=1):
             path_str = str(file)
             existing = known.get(path_str)
             if existing is not None and existing.missing_since is None:
                 summary.skipped_known += 1
+                _progress[library.id] = (done, len(pending))
+                continue
+            # 完整性检测：mtime 太新 = 疑似写入中（下载/拷贝进行时），本轮
+            # 暂缓入账、稍后补扫——库不假设目录用途，根路径完全可能同时是
+            # 下载目录。mtime 在未来超出一个窗口视为时钟异常，照常入账
+            try:
+                age = now_ts - file.stat().st_mtime
+            except OSError:
+                age = NEW_FILE_QUIET_SECONDS  # 瞬时消失/不可读：交给后续流程处理
+            if -NEW_FILE_QUIET_SECONDS <= age < NEW_FILE_QUIET_SECONDS:
+                summary.deferred += 1
+                remaining = NEW_FILE_QUIET_SECONDS - age
+                min_remaining = (
+                    remaining if min_remaining is None else min(min_remaining, remaining)
+                )
                 _progress[library.id] = (done, len(pending))
                 continue
             try:
@@ -200,15 +254,24 @@ async def _scan(library_id: int, summary: ScanSummary) -> ScanSummary:
             await repo.mark_missing(row.id, since=now)
             summary.marked_missing += 1
 
+    if min_remaining is not None:
+        summary.recheck_delay_seconds = max(5.0, min(min_remaining + 1.0, NEW_FILE_QUIET_SECONDS))
     if summary.marked_missing:
         logger.warning(
             "媒体库 #%s：%d 个文件已不在原位，已标记 missing（记录保留，文件回归自动恢复）",
             library_id,
             summary.marked_missing,
         )
+    if summary.deferred:
+        logger.info(
+            "媒体库 #%s：%d 个文件疑似写入中，本轮暂缓入账，约 %d 秒后自动补扫",
+            library_id,
+            summary.deferred,
+            int(summary.recheck_delay_seconds),
+        )
     logger.info(
         "媒体库 #%s 扫描完成：新入账 %d（已识别 %d / 待识别 %d），"
-        "改名归并 %d，跳过已知 %d，标记丢失 %d，问题 %d",
+        "改名归并 %d，跳过已知 %d，标记丢失 %d，暂缓 %d，问题 %d",
         library_id,
         summary.scanned - summary.relinked,
         summary.identified,
@@ -216,6 +279,7 @@ async def _scan(library_id: int, summary: ScanSummary) -> ScanSummary:
         summary.relinked,
         summary.skipped_known,
         summary.marked_missing,
+        summary.deferred,
         len(summary.errors),
     )
     return summary

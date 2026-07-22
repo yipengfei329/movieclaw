@@ -79,6 +79,8 @@ export interface LastScan {
   identified: number;
   unidentified: number;
   marked_missing: number;
+  /** 疑似写入中暂缓入账的文件数（稍后自动补扫） */
+  deferred: number;
   errors: string[];
 }
 

@@ -59,6 +59,24 @@ VIDEO_EXTS = {
 # 文件名/路径含这些标记的视频不入库（样品片段等）
 _IGNORE_MARKERS = ("sample",)
 
+# 下载器/浏览器的"未完成"标记（文件名小写后缀匹配）：qBittorrent .!qb、
+# aria2 控制文件 .aria2、Chrome .crdownload、Firefox/迅雷等 .part/.td、
+# BitComet .bc!、通用临时后缀。扫描器与监听导入共用（放在本模块避免
+# scan ↔ ingest 的循环导入）
+IN_PROGRESS_MARKERS = (
+    ".!qb",
+    ".part",
+    ".aria2",
+    ".crdownload",
+    ".download",
+    ".downloading",
+    ".td",
+    ".bc!",
+    ".tmp",
+    ".temp",
+    ".unfinished",
+)
+
 
 class LibraryImportError(Exception):
     """整理失败。message 是完整中文句子，直接进活动时间线。"""

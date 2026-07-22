@@ -187,6 +187,9 @@ export function LibraryDetailView({ libraryId }: { libraryId: number }) {
                 {library.last_scan.marked_missing > 0
                   ? ` · 标记丢失 ${library.last_scan.marked_missing}`
                   : ""}
+                {library.last_scan.deferred > 0
+                  ? ` · ${library.last_scan.deferred} 个写入中暂缓（稍后自动补扫）`
+                  : ""}
                 {library.last_scan.errors.length > 0
                   ? ` · ${library.last_scan.errors[0]}`
                   : ""}

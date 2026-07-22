@@ -76,6 +76,7 @@ def _last_scan_view(library_id: int) -> LastScanView | None:
         identified=summary.identified,
         unidentified=summary.unidentified,
         marked_missing=summary.marked_missing,
+        deferred=summary.deferred,
         errors=list(summary.errors),
     )
 

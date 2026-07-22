@@ -50,6 +50,7 @@ class LastScanView(BaseModel):
     identified: int
     unidentified: int
     marked_missing: int = Field(description="本轮标记丢失的文件数")
+    deferred: int = Field(default=0, description="疑似写入中暂缓入账的文件数（稍后自动补扫）")
     errors: list[str] = Field(default_factory=list)
 
     @field_serializer("finished_at")
