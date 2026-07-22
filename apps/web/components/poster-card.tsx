@@ -3,7 +3,7 @@
 import type { Route } from "next";
 import Link from "next/link";
 
-import { PlayIcon, StarIcon } from "@/components/icons";
+import { BellIcon, CheckIcon, DownloadIcon, PlayIcon, StarIcon } from "@/components/icons";
 import { PosterImage } from "@/components/poster-image";
 import { useSubscribeEntry } from "@/components/subscribe-entry";
 import { useMediaDetail } from "@/lib/media-detail";
@@ -29,12 +29,26 @@ export interface PosterCardProps {
 }
 
 /**
- * 悬浮层操作区的三种形态，按内容与用户的关系选择：
+ * 悬浮层操作区的形态，按内容与用户的关系选择：
  * - subscribe：还没拥有（发现页/搜索），给「订阅影片」入口；
- * - owned：已在媒体库（库首页最近添加、单库库存墙），订阅无意义，改为「已入库」标识；
+ * - follow：已在库的在播剧（还会有新集），给「订阅追新」入口；
+ * - backfill：已在库的完结剧但已播集有缺口，给「补齐缺集」入口
+ *   （订阅创建按 E−H 跳过库里已有的集，只为缺的集生成工单）；
+ * - owned：已在媒体库且无后续动作（电影/完结齐全剧），静态「已入库」标识；
  * - none：已订阅但尚未落地（单库页「追踪中」），再给订阅按钮是重复操作，不显示。
+ *
+ * 前三种都是订阅入口，仅文案/图标不同；该影片已存在订阅时自动切换为
+ * 「已订阅」状态徽标（点击进入订阅管理弹层），状态来自 SubscribeEntryProvider
+ * 的全站订阅列表，卡片自身不发请求。
  */
-export type PosterCardAction = "subscribe" | "owned" | "none";
+export type PosterCardAction = "subscribe" | "follow" | "backfill" | "owned" | "none";
+
+/** 三种订阅入口的文案与图标（已订阅时统一切换为状态徽标，不走这张表）。 */
+const SUBSCRIBE_ACTION_META = {
+  subscribe: { label: "订阅影片", Icon: PlayIcon },
+  follow: { label: "订阅追新", Icon: BellIcon },
+  backfill: { label: "补齐缺集", Icon: DownloadIcon },
+} as const;
 
 /**
  * 海报卡片的最小视觉契约。搜索结果不含年份和类型，缺失字段保持不显示，
@@ -109,7 +123,13 @@ function PosterCardContent({
   rank?: number;
   action?: PosterCardAction;
 }) {
-  const { open: openSubscribe } = useSubscribeEntry();
+  const { open: openSubscribe, subscriptionOf } = useSubscribeEntry();
+  // 订阅入口类动作（subscribe/follow/backfill）才需要判断订阅状态；owned/none 不查询
+  const subscribeMeta =
+    action === "subscribe" || action === "follow" || action === "backfill"
+      ? SUBSCRIBE_ACTION_META[action]
+      : null;
+  const existingSub = subscribeMeta ? subscriptionOf(item) : undefined;
   const badges = item.badges ?? [];
   const genres = item.genres ?? [];
   const overview = item.overview ?? "";
@@ -171,14 +191,19 @@ function PosterCardContent({
             )}
             {action !== "none" && (
               <div className="mt-2.5 flex items-center gap-2">
-                {action === "subscribe" ? (
-                  /* 未拥有的内容才给订阅入口（打开订阅弹层）。外层整卡是
-                     button/Link，内层不能再嵌 button，用 role=button 的 span 承载；
+                {subscribeMeta ? (
+                  /* 订阅入口（打开订阅弹层）。已订阅时切换为状态徽标，点击进入
+                     同一弹层的管理态（可调整/取消订阅）。外层整卡是 button/Link，
+                     内层不能再嵌 button，用 role=button 的 span 承载；
                      preventDefault 拦掉 Link 跳转，stopPropagation 拦掉整卡 onClick。 */
                   <span
                     role="button"
                     tabIndex={0}
-                    aria-label={`订阅《${item.title}》`}
+                    aria-label={
+                      existingSub
+                        ? `管理《${item.title}》的订阅`
+                        : `${subscribeMeta.label}《${item.title}》`
+                    }
                     onClick={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
@@ -191,10 +216,23 @@ function PosterCardContent({
                         void openSubscribe(item);
                       }
                     }}
-                    className="btn-accent flex h-7 items-center gap-1 rounded-full px-3 text-[11px] font-semibold"
+                    className={
+                      existingSub
+                        ? "flex h-7 items-center gap-1.5 rounded-full bg-white/[0.14] px-3 text-[11px] font-semibold text-white/90 backdrop-blur-sm transition-colors hover:bg-white/[0.22]"
+                        : "btn-accent flex h-7 items-center gap-1 rounded-full px-3 text-[11px] font-semibold"
+                    }
                   >
-                    <PlayIcon className="size-3" />
-                    订阅影片
+                    {existingSub ? (
+                      <>
+                        <CheckIcon className="size-3 text-[#4ade80]" />
+                        已订阅
+                      </>
+                    ) : (
+                      <>
+                        <subscribeMeta.Icon className="size-3" />
+                        {subscribeMeta.label}
+                      </>
+                    )}
                   </span>
                 ) : (
                   /* 已入库标识：非交互，与库存格下方的绿点语言一致 */

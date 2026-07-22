@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ArrowLeftIcon } from "@/components/icons";
 import { PosterImage } from "@/components/poster-image";
+import { useSubscribeEntry } from "@/components/subscribe-entry";
 import {
   deleteSubscription,
   getSubscription,
@@ -37,6 +38,8 @@ import { formatDateTime, formatRelativeTime } from "@/lib/time";
  */
 export function SubscriptionInspectorView({ id }: { id: number }) {
   const router = useRouter();
+  // 暂停/取消订阅会改变全站订阅状态（海报卡片的「已订阅」徽标），操作后同步刷新
+  const { refresh: refreshSubscriptions } = useSubscribeEntry();
   const [detail, setDetail] = useState<SubscriptionDetail | null>(null);
   const [activities, setActivities] = useState<SubscriptionActivity[]>([]);
   const [ruleSets, setRuleSets] = useState<RuleSet[]>([]);
@@ -95,6 +98,7 @@ export function SubscriptionInspectorView({ id }: { id: number }) {
     try {
       await pauseSubscription(detail.id, detail.status !== "paused");
       reload();
+      refreshSubscriptions();
     } finally {
       setBusy(false);
     }
@@ -105,6 +109,7 @@ export function SubscriptionInspectorView({ id }: { id: number }) {
     setBusy(true);
     try {
       await deleteSubscription(detail.id);
+      refreshSubscriptions();
       router.push("/subscriptions");
     } finally {
       setBusy(false);

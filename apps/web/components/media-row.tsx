@@ -6,7 +6,7 @@ import Link from "next/link";
 
 import { ChevronLeftIcon, ChevronRightIcon } from "@/components/icons";
 import { PosterCard, type PosterCardAction } from "@/components/poster-card";
-import type { MediaRowData } from "@/lib/media-types";
+import type { MediaItem, MediaRowData } from "@/lib/media-types";
 
 /**
  * 横滚海报行（Netflix 式分类行）。
@@ -26,8 +26,11 @@ export function MediaRow({
   row: MediaRowData;
   moreHref?: Route;
   moreLabel?: string;
-  /** 卡片悬浮操作区变体（媒体库场景传 "owned"），缺省为「订阅影片」 */
-  cardAction?: PosterCardAction;
+  /**
+   * 卡片悬浮操作区变体，缺省为「订阅影片」。媒体库「最近添加」行的动作
+   * 因条目而异（在播剧追新/完结缺集补齐/齐全已入库），支持传函数逐条目决定。
+   */
+  cardAction?: PosterCardAction | ((item: MediaItem) => PosterCardAction);
 }) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [canLeft, setCanLeft] = useState(false);
@@ -83,7 +86,11 @@ export function MediaRow({
                 row.ranked ? "w-[188px]" : "w-[152px] xl:w-[164px]"
               }`}
             >
-              <PosterCard item={item} rank={row.ranked ? i + 1 : undefined} action={cardAction} />
+              <PosterCard
+                item={item}
+                rank={row.ranked ? i + 1 : undefined}
+                action={typeof cardAction === "function" ? cardAction(item) : cardAction}
+              />
             </div>
           ))}
         </div>
