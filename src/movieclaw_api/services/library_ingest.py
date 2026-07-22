@@ -26,14 +26,18 @@
    还在继续/季包补了新集）自动重新处理，失败条目另有小时级退避——
    这同时给了"边下边补集"的增量导入能力。
 
-触发机制（事件驱动，不做常驻轮询——监听目录里的保种源会永远留着，
-高频全量 stat 会让 NAS 磁盘永远无法休眠）：
+触发机制（事件驱动，尽量不主动扫——监听目录里的保种源会永远留着，
+主动全量 stat 会让 NAS 磁盘永远无法休眠）：
 - 正常路径：``IngestWatcher`` 对监听目录挂 watchdog，有事件才去抖巡检
   对应目录；下载写入持续产生事件，事件停止本身就是静默的开端；
 - 静默到点自检：事件停了之后没人会再叫醒我们，每轮巡检后若仍有条目在
   等静默窗口，按最近到期时间挂一次性自检，全部落定即归零；
-- 兜底：每小时一次低频全量巡检 + 启动补扫，覆盖网络挂载不产生 fs 事件
-  与停机期间错过事件的场景（与库根监听"事件 + 对账兜底"同一套模式）。
+- 唯一的主动扫：目录**初次纳入监听**时补扫该目录一次——监听建立之前
+  完成的下载（停机期间/目录刚就绪/刚加进配置）不会再产生事件，只有
+  这一次能接住；之后该目录全靠事件驱动；
+- 兜底：每小时重建一次失效监听，并只巡检**监听覆盖不到**的目录
+  （目录不存在/watchdog 缺失/挂载不产生 fs 事件）；正被实时监听的目录
+  绝不重复主动扫。
 
 幂等与安全：
 - 源文件**永不改动**：硬链保种零占用（需与主根同盘），复制适合跨盘；
@@ -200,11 +204,18 @@ def _snapshot(entry: Path) -> _EntrySnapshot:
     trigger_type=TriggerType.INTERVAL,
     interval_seconds=FALLBACK_SWEEP_SECONDS,
     description=(
-        "低频兜底巡检各媒体库的下载监听目录（正常路径是目录事件实时触发）：下载"
-        "完成（下载器确认或指纹静默 + 探测通过）的内容按目录策略硬链接/复制进库主根。"
+        "低频兜底：重建失效的目录监听，并巡检监听覆盖不到的下载监听目录"
+        "（正在被实时监听的目录由事件驱动，不主动扫）。"
     ),
 )
 async def ingest_tick() -> None:
+    # 先重建监听：目录此前未就绪（挂载晚于启动）或监听失效时借此恢复；
+    # 新纳入监听的目录由 refresh_watches 触发一次该目录的补扫
+    watcher = get_ingest_watcher()
+    if watcher is not None:
+        await watcher.refresh_watches()
+    watched = watcher.watched_keys() if watcher is not None else frozenset()
+
     db = get_database()
     async with db.session() as session:
         libraries = list((await session.execute(select(Library))).scalars().all())
@@ -213,6 +224,8 @@ async def ingest_tick() -> None:
             path, strategy = cfg.get("path"), cfg.get("strategy")
             if not path or strategy not in ("hardlink", "copy"):
                 continue  # 历史脏配置：写入侧已校验，这里静默容错
+            if (library.id, path) in watched:
+                continue  # watchdog 在实时盯着：事件路径负责，不重复主动扫
             try:
                 await _sweep_dir(library, path, strategy)
             except Exception:  # noqa: BLE001 -- 单目录失败不拖垮整轮
@@ -639,17 +652,26 @@ class IngestWatcher:
         self._consumer: asyncio.Task | None = None
         self._catchup: asyncio.Task | None = None
         self._available = True
+        # 当前实际在监听的目录集合：兜底巡检据此跳过它们（事件路径已负责）
+        self._watched: set[tuple[int, str]] = set()
         # 静默到点自检任务：每个监听目录至多挂一个
         self._rechecks: dict[tuple[int, str], asyncio.Task] = {}
+
+    def watched_keys(self) -> frozenset[tuple[int, str]]:
+        """实际在监听的 (库 id, 目录) 集合——兜底巡检只扫不在此列的目录。"""
+        return frozenset(self._watched)
 
     # -- 生命周期 ----------------------------------------------------------
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
         self._consumer = asyncio.create_task(self._consume())
+        # refresh_watches 会把初次纳入监听的目录逐个投队列补扫（覆盖停机
+        # 期间完成的下载），不做独立的全量扫描
         await self.refresh_watches()
-        # 启动补扫：停机期间完成的下载不会再产生事件，开机全量扫一次补上
-        self._catchup = asyncio.create_task(ingest_tick())
+        if not self._available:
+            # watchdog 缺失：事件路径不存在，开机全量补扫一次顶上
+            self._catchup = asyncio.create_task(ingest_tick())
 
     async def stop(self) -> None:
         for task in (self._consumer, self._catchup, *self._rechecks.values()):
@@ -695,7 +717,7 @@ class IngestWatcher:
 
         self._stop_observer()
         observer = Observer()
-        watched = 0
+        watched: set[tuple[int, str]] = set()
         for library in libraries:
             assert library.id is not None
             for cfg in library.ingest_dirs:
@@ -706,14 +728,21 @@ class IngestWatcher:
                     continue  # 目录未就绪：兜底巡检持续兜着，不告警刷屏
                 try:
                     observer.schedule(_Handler(library.id, path), path, recursive=True)
-                    watched += 1
+                    watched.add((library.id, path))
                 except OSError as exc:
                     logger.warning("监听下载目录失败（%s）：%s", path, exc)
+        # 初次纳入监听的目录补扫一次：监听建立之前完成的下载（停机期间/
+        # 目录刚就绪/刚加进配置）不会再产生事件，只有这一次主动扫能接住；
+        # 之后全靠事件驱动，不再主动扫它
+        newly_watched = watched - self._watched
+        self._watched = watched
         if watched:
             observer.daemon = True
             observer.start()
             self._observer = observer
-            logger.info("下载监听已启动：监听 %d 个目录", watched)
+            logger.info("下载监听已启动：监听 %d 个目录", len(watched))
+        for key in sorted(newly_watched):
+            self._queue.put_nowait(key)
 
     # -- 事件通道 ----------------------------------------------------------
 

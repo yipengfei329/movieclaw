@@ -364,6 +364,45 @@ async def test_probe_gate_applies_per_file(db, tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_fallback_only_sweeps_unwatched_dirs(db, tmp_path, monkeypatch):
+    """兜底巡检只扫监听覆盖不到的目录：被实时监听的目录绝不重复主动扫。"""
+    root = tmp_path / "movies"
+    watch1, watch2 = tmp_path / "watch1", tmp_path / "watch2"
+    watch1.mkdir()
+    watch2.mkdir()
+    library_id = await _make_library(
+        db,
+        kind=MediaKind.MOVIE,
+        root=root,
+        ingest_dirs=[
+            {"path": str(watch1), "strategy": "hardlink"},
+            {"path": str(watch2), "strategy": "hardlink"},
+        ],
+    )
+
+    swept: list[str] = []
+
+    async def record_sweep(library, watch_root, strategy):
+        swept.append(watch_root)
+
+    monkeypatch.setattr(ingest_mod, "_sweep_dir", record_sweep)
+
+    class _StubWatcher:
+        """只监听 watch1 的假观察者。"""
+
+        def watched_keys(self):
+            return frozenset({(library_id, str(watch1))})
+
+        async def refresh_watches(self):
+            pass
+
+    monkeypatch.setattr(ingest_mod, "_watcher", _StubWatcher())
+
+    await ingest_mod.ingest_tick()
+    assert swept == [str(watch2)]
+
+
+@pytest.mark.asyncio
 async def test_ingest_dir_must_not_overlap_roots(db, tmp_path):
     """配置校验：监听目录与库根路径前缀重叠直接拒绝。"""
     root = tmp_path / "movies"
