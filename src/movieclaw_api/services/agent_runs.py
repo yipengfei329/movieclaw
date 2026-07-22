@@ -110,9 +110,7 @@ class AgentRunRegistry:
         run = self._get_run(run_id)
         async with run.condition:
             if after_sequence > len(run.events):
-                raise BadRequestException(
-                    f"SSE 事件游标 {after_sequence} 超出当前事件范围"
-                )
+                raise BadRequestException(f"SSE 事件游标 {after_sequence} 超出当前事件范围")
             if after_sequence == len(run.events) and not run.terminal:
                 try:
                     await asyncio.wait_for(

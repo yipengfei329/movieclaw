@@ -38,9 +38,7 @@ class RuleSetService:
         existing = await self._repo.get_default()
         if existing is not None:
             return existing
-        row = await self._repo.save(
-            RuleSet(name=_DEFAULT_NAME, is_default=True, spec={})
-        )
+        row = await self._repo.save(RuleSet(name=_DEFAULT_NAME, is_default=True, spec={}))
         logger.info("已创建默认规则组（全不限），新订阅未指定规则组时使用它")
         return row
 

@@ -141,9 +141,7 @@ async def get_discover_page(
     """
     try:
         service = (
-            get_douban_media_service()
-            if source is DiscoverSource.DOUBAN
-            else get_media_service()
+            get_douban_media_service() if source is DiscoverSource.DOUBAN else get_media_service()
         )
         page = await service.discover_page(kind)
     except (TmdbError, DoubanError) as exc:

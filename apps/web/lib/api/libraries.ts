@@ -30,12 +30,6 @@ export interface LibraryStats {
   missing_count: number;
 }
 
-/** 一个下载监听目录：路径 + 搬运策略（硬链接零占用需同盘，复制可跨盘）。 */
-export interface IngestDir {
-  path: string;
-  strategy: "hardlink" | "copy";
-}
-
 export interface MediaLibrary {
   id: number;
   name: string;
@@ -44,8 +38,6 @@ export interface MediaLibrary {
   /** 根路径列表（绝对路径），第一个为主根——新入库落在这里 */
   root_paths: string[];
   primary_root: string | null;
-  /** 下载监听目录：其中下载完成的内容自动按规范命名搬进主根 */
-  ingest_dirs: IngestDir[];
   /** 是否为该类型的默认库（订阅/手动下载不选库时用它） */
   is_default: boolean;
   /** 库存统计（library_file 台账聚合） */
@@ -181,7 +173,6 @@ export interface LibraryPayload {
   name: string;
   kind: MediaType;
   root_paths: string[];
-  ingest_dirs: IngestDir[];
 }
 
 /** 列出全部媒体库（可按类型过滤）。 */

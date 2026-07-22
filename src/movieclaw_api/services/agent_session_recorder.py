@@ -73,9 +73,7 @@ class AgentSessionRecorder:
                 )
                 return
             async with get_database().session() as session:
-                await AgentSessionRepository(session).mark_running(
-                    self._session_id, run_id
-                )
+                await AgentSessionRepository(session).mark_running(self._session_id, run_id)
             self._heartbeat_task = asyncio.create_task(
                 self._heartbeat_loop(),
                 name=f"agent-session-heartbeat-{self._session_id}",

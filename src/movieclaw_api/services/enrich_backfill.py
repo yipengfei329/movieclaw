@@ -33,17 +33,21 @@ async def reenrich_stale_torrents() -> int:
         try:
             async with db.session() as session:
                 rows = (
-                    await session.execute(
-                        select(SiteTorrent)
-                        .where(
-                            or_(
-                                SiteTorrent.enrich_version.is_(None),  # type: ignore[union-attr]
-                                SiteTorrent.enrich_version != ENRICH_VERSION,
+                    (
+                        await session.execute(
+                            select(SiteTorrent)
+                            .where(
+                                or_(
+                                    SiteTorrent.enrich_version.is_(None),  # type: ignore[union-attr]
+                                    SiteTorrent.enrich_version != ENRICH_VERSION,
+                                )
                             )
+                            .limit(_BATCH_SIZE)
                         )
-                        .limit(_BATCH_SIZE)
                     )
-                ).scalars().all()
+                    .scalars()
+                    .all()
+                )
                 if not rows:
                     break
                 for row in rows:

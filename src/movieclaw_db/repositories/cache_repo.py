@@ -23,9 +23,7 @@ class CacheRepository:
     async def get(self, namespace: str, key: str) -> CacheEntry | None:
         """读取一条缓存记录；不存在返回 None。"""
         result = await self._session.execute(
-            select(CacheEntry).where(
-                CacheEntry.namespace == namespace, CacheEntry.cache_key == key
-            )
+            select(CacheEntry).where(CacheEntry.namespace == namespace, CacheEntry.cache_key == key)
         )
         return result.scalar_one_or_none()
 

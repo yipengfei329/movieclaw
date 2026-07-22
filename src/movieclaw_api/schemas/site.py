@@ -111,9 +111,7 @@ class ConfiguredSite(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    @field_serializer(
-        "last_verified_at", "last_checked_at", "created_at", "updated_at"
-    )
+    @field_serializer("last_verified_at", "last_checked_at", "created_at", "updated_at")
     def _serialize_utc(self, value: datetime | None) -> str | None:
         """把库内的 naive UTC 时间序列化为**带 UTC 时区标记**的 ISO 串。
 
@@ -169,9 +167,7 @@ class SiteSyncStatsView(BaseModel):
     next_sync_at: datetime | None = Field(
         default=None, description="下次同步到期时刻；None=立即到期"
     )
-    sync_interval_seconds: int | None = Field(
-        default=None, description="当前自适应轮询间隔（秒）"
-    )
+    sync_interval_seconds: int | None = Field(default=None, description="当前自适应轮询间隔（秒）")
     last_new_count: int | None = Field(default=None, description="上次同步新增种子数")
     last_error: str | None = Field(default=None, description="上次同步失败原因；成功为 None")
     consecutive_failures: int = Field(default=0, description="连续同步失败次数；成功清零")

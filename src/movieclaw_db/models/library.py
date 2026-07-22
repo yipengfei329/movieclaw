@@ -17,10 +17,9 @@ class Library(TimestampMixin, table=True):
     约定：
     - 每库单一类型（movie/tv），命名规范与订阅联通都按类型走；
     - ``root_paths`` 是字符串数组，**第一个为主根**（新入库落主根，
-      其余为扩展根，供 L3 盘点对账）；
-    - ``ingest_dirs`` 是下载监听目录配置数组（独立于根路径），每项
-      ``{"path": 绝对路径, "strategy": "hardlink"|"copy"}``——监听到目录里
-      有下载完成的内容后按策略搬进库主根（library_ingest 消费）；
+      其余为扩展根，供 L3 盘点对账）——库只有这一套目录体系，对目录的
+      用途不做任何假设（它可以同时是下载目录，扫描的完整性检测兜底）；
+      "把外部内容搬进库"是独立模块「监听导入」（import_watch）的职责；
     - 每 kind 至多一个默认库（``is_default``），订阅/手动下载不选库时用它。
       不变量由 Repository 维护：同 kind 第一个库自动成为默认；删除默认库时
       默认让给同 kind 剩下最早创建的一个。
@@ -38,12 +37,6 @@ class Library(TimestampMixin, table=True):
         default_factory=list,
         sa_column=Column(JSON, nullable=False),
         description="根路径列表（绝对路径，第一个为主根）",
-    )
-    # 下载监听目录配置：[{"path": ..., "strategy": "hardlink"|"copy"}]
-    ingest_dirs: list = Field(
-        default_factory=list,
-        sa_column=Column(JSON, nullable=False),
-        description="下载监听目录列表（含每目录的搬运策略）",
     )
     # 每 kind 至多一个默认库
     is_default: bool = Field(default=False, description="是否为该类型的默认库")

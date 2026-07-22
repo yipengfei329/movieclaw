@@ -101,14 +101,13 @@ class SecretBox:
         """
         if not value.startswith(_ENC_PREFIX):
             return value
-        token = value[len(_ENC_PREFIX):]
+        token = value[len(_ENC_PREFIX) :]
         try:
             return self._fernet.decrypt(token.encode("ascii")).decode("utf-8")
         except InvalidToken as exc:
             # 密钥不匹配（换了 MASTER_KEY / 丢了密钥文件）或密文被篡改
             raise ValueError(
-                "配置密文解密失败：加密密钥可能已变更或密钥文件丢失，"
-                "无法还原该敏感字段。"
+                "配置密文解密失败：加密密钥可能已变更或密钥文件丢失，无法还原该敏感字段。"
             ) from exc
 
     @staticmethod

@@ -141,7 +141,9 @@ async def _verify_query(
     fresh = [c for c in extra if c.tmdb_id not in known]
     if not fresh:
         return None
-    logger.info("扫描收敛年份补搜：「%s」(%s) 新增 %d 个候选", evidence.title, evidence.year, len(fresh))
+    logger.info(
+        "扫描收敛年份补搜：「%s」(%s) 新增 %d 个候选", evidence.title, evidence.year, len(fresh)
+    )
     picked_id = await _verify_pool(client, kind, evidence, fresh, language)
     if picked_id is None:
         return None
@@ -215,7 +217,9 @@ async def _verify_pool(
     for c in passers:
         counter = _counter_evidence(kind, evidence, c)
         if counter:
-            logger.info("扫描收敛淘汰候选《%s》：%s（查询「%s」）", c.title, counter, evidence.title)
+            logger.info(
+                "扫描收敛淘汰候选《%s》：%s（查询「%s」）", c.title, counter, evidence.title
+            )
             continue
         survivors.append(c)
     if not survivors:

@@ -404,9 +404,7 @@ class SubscriptionService:
         assert item.id is not None
         existing = await self._repo.get_by_media_item(item.id)
         if existing is None:
-            seasons = (
-                sorted({s for s, _ in units if s > 0}) if kind is MediaKind.TV else None
-            )
+            seasons = sorted({s for s, _ in units if s > 0}) if kind is MediaKind.TV else None
             subscription = await self.create(
                 kind, item.tmdb_id, selected_seasons=seasons, library_id=library_id
             )

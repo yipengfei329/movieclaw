@@ -89,9 +89,7 @@ class SiteTorrent(TimestampMixin, table=True):
     download_volume_factor: float | None = Field(
         default=None, description="下载系数 0/0.3/0.5/1.0；NULL=未观测"
     )
-    upload_volume_factor: float | None = Field(
-        default=None, description="上传系数；NULL=未观测"
-    )
+    upload_volume_factor: float | None = Field(default=None, description="上传系数；NULL=未观测")
     # 派生列：便于「筛当前免费」快速查询；由 upsert 层依 factor 维护，不独立赋值
     is_free: bool | None = Field(
         default=None, index=True, description="是否全免；派生自 factor，NULL=未知"
@@ -104,9 +102,7 @@ class SiteTorrent(TimestampMixin, table=True):
 
     # -- H&R 考核：三态——True=有考核，False=站点标注无考核，NULL=站点不提供/未适配。
     # 与促销不同，缺席不代表没有考核，绝不能塌缩成 False（见 tracker 层同名字段注释）
-    hit_and_run: bool | None = Field(
-        default=None, description="是否 H&R 考核种子；NULL=未知"
-    )
+    hit_and_run: bool | None = Field(default=None, description="是否 H&R 考核种子；NULL=未知")
 
     # -- 扩充层：movieclaw_enrich 从标题/副标题推导的结构化属性 -------------
     # attrs 存 TorrentAttrs 的 JSON（exclude_defaults，空产出为 {}）；
@@ -134,17 +130,13 @@ class SiteTorrent(TimestampMixin, table=True):
     # created_at（来自 Mixin）即「首次入库时间」，不再单设 first_seen
     source: TorrentSource = Field(description="本行当前数据的采集来源")
     # 最近一次在列表里「看到」它——证明它还在榜上，与内容是否变化无关
-    last_seen_at: datetime = Field(
-        default_factory=utcnow, description="最近一次被列表观测到"
-    )
+    last_seen_at: datetime = Field(default_factory=utcnow, description="最近一次被列表观测到")
     # 最近一次成功刷新易变层的时间——下载决策据此判断 free/seeders 是否过期
     volatile_refreshed_at: datetime | None = Field(
         default=None, description="易变层最近成功刷新时间；NULL=从未拿到过易变数据"
     )
     # 最近一次详情页富化时间；NULL=从未补过详情
-    detail_enriched_at: datetime | None = Field(
-        default=None, description="详情层最近富化时间"
-    )
+    detail_enriched_at: datetime | None = Field(default=None, description="详情层最近富化时间")
 
 
 class SiteSyncCursor(TimestampMixin, table=True):
@@ -163,13 +155,9 @@ class SiteSyncCursor(TimestampMixin, table=True):
     site_id: str = Field(index=True, unique=True, description="站点标识")
 
     # 跟踪起点 t0：用户添加站点即写入，是回补翻页的时间下限
-    tracking_since: datetime = Field(
-        default_factory=utcnow, description="开始跟踪时间(t0)"
-    )
+    tracking_since: datetime = Field(default_factory=utcnow, description="开始跟踪时间(t0)")
     # 已知最新种子的发布时间 / ID——增量停止条件的参考（真正判重仍按 torrent_id 查表）
-    newest_publish_time: datetime | None = Field(
-        default=None, description="已知最新发布时间"
-    )
+    newest_publish_time: datetime | None = Field(default=None, description="已知最新发布时间")
     newest_torrent_id: str | None = Field(default=None, description="已知最新种子 ID")
 
     last_sync_at: datetime | None = Field(default=None, description="上次同步完成时间")

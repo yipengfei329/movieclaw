@@ -141,9 +141,7 @@ class ImageProxy:
                         current = str(httpx.URL(current).join(location))
                         continue
                     response.raise_for_status()
-                    content_type = (
-                        response.headers.get("content-type", "").split(";", 1)[0].lower()
-                    )
+                    content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
                     if not content_type.startswith("image/"):
                         raise UpstreamServiceException("远端地址返回的内容不是图片")
                     declared_size = int(response.headers.get("content-length") or 0)

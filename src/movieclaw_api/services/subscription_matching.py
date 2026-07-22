@@ -226,9 +226,7 @@ def covered_units(
         result.extend(
             w
             for (season, _), w in open_units.items()
-            if season in match.pack_seasons
-            and w not in result
-            and _airable(w, require_dated=True)
+            if season in match.pack_seasons and w not in result and _airable(w, require_dated=True)
         )
     return result
 
@@ -256,9 +254,7 @@ async def evaluate_and_dispatch(
         if candidate is None:
             continue
         published = (
-            candidate.publish_time.date()
-            if candidate.publish_time is not None
-            else utcnow().date()
+            candidate.publish_time.date() if candidate.publish_time is not None else utcnow().date()
         )
         for media_id, ctx in contexts.items():
             match = match_identity(candidate, ctx.identity)
@@ -280,9 +276,7 @@ async def evaluate_and_dispatch(
     # 它覆盖的单元从缺口里划掉，剩余缺口继续由次优候选补
     for media_id, entries in accepted.items():
         ctx = contexts[media_id]
-        entries.sort(
-            key=lambda e: (e[1].is_pack, e[2].score, e[0].seeders or 0), reverse=True
-        )
+        entries.sort(key=lambda e: (e[1].is_pack, e[2].score, e[0].seeders or 0), reverse=True)
         remaining = dict(ctx.open_wanted)
         for candidate, match, verdict in entries:
             published = (
@@ -304,9 +298,7 @@ async def evaluate_and_dispatch(
             )
             if done:
                 summary.dispatched_units += len(targets)
-                summary.dispatched_torrents.append(
-                    f"{candidate.site_id}/{candidate.torrent_id}"
-                )
+                summary.dispatched_torrents.append(f"{candidate.site_id}/{candidate.torrent_id}")
                 for w in targets:
                     remaining.pop((w.season_number, w.episode_number), None)
 

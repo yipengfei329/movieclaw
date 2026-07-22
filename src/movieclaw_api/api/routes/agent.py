@@ -97,9 +97,7 @@ async def start_agent(
         on_message=recorder.on_message,
     )
     params = AgentStartParams(input=payload.input, history=history, model=payload.model)
-    run_id = get_agent_run_registry().start(
-        runner, params, on_terminal=recorder.on_terminal
-    )
+    run_id = get_agent_run_registry().start(runner, params, on_terminal=recorder.on_terminal)
     await recorder.begin(run_id)
     return ok(
         AgentStartView(run_id=run_id, session_id=session_id),

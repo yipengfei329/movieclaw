@@ -90,15 +90,8 @@ class LibraryConfigService:
 
     # -- 写入 --------------------------------------------------------------
 
-    def _validate(
-        self, *, name: str, root_paths: list[str], ingest_dirs: list[dict] | None = None
-    ) -> tuple[list[str], list[dict]]:
-        """公共校验：名称非空、根路径非空且均为绝对路径、下载监听目录合法。
-
-        返回清洗后的（根列表, 监听目录列表）。监听目录不允许与根路径有
-        前缀重叠——监听目录在库根之下会被扫描当存量文件原地入账，库根在
-        监听目录之下会把整库当"下载完成的条目"处理，两个方向都是灾难。
-        """
+    def _validate(self, *, name: str, root_paths: list[str]) -> list[str]:
+        """公共校验：名称非空、根路径非空且均为绝对路径。返回清洗后的根列表。"""
         if not name.strip():
             raise BadRequestException("库名称不能为空")
         cleaned = [p.strip() for p in root_paths if p.strip()]
@@ -109,25 +102,29 @@ class LibraryConfigService:
                 raise BadRequestException(f"根路径必须是绝对路径：{path}")
         if len(set(cleaned)) != len(cleaned):
             raise BadRequestException("根路径存在重复项")
+        return cleaned
 
-        ingest_cleaned: list[dict] = []
-        for entry in ingest_dirs or []:
-            path = str(entry.get("path", "")).strip().rstrip("/")
-            strategy = str(entry.get("strategy", "")).strip()
-            if not path:
-                continue
-            if not path.startswith("/"):
-                raise BadRequestException(f"下载监听目录必须是绝对路径：{path}")
-            if strategy not in ("hardlink", "copy"):
-                raise BadRequestException(f"下载监听目录的策略必须是硬链接或复制：{path}")
-            for root in cleaned:
-                r = root.rstrip("/")
-                if path == r or path.startswith(r + "/") or r.startswith(path + "/"):
-                    raise BadRequestException(f"下载监听目录不能与库根路径重叠：{path} ↔ {root}")
-            ingest_cleaned.append({"path": path, "strategy": strategy})
-        if len({d["path"] for d in ingest_cleaned}) != len(ingest_cleaned):
-            raise BadRequestException("下载监听目录存在重复项")
-        return cleaned, ingest_cleaned
+    async def _assert_roots_clear_of_import_watch(self, roots: list[str]) -> None:
+        """根路径不得与任何监听导入规则的源目录前缀重叠。
+
+        源目录在库根之下会被扫描当存量原地入账，库根在源目录之下会把
+        整库当"下载完成的条目"搬运，两个方向都是双头管理的灾难。
+        监听导入侧建规则时做同样的反向校验（import_watch_config）。
+        """
+        from sqlmodel import select
+
+        from movieclaw_db.models import ImportWatch
+
+        rows = list((await self._session.execute(select(ImportWatch))).scalars().all())
+        for root in roots:
+            r = root.rstrip("/")
+            for rule in rows:
+                s = rule.source_path.rstrip("/")
+                if r == s or r.startswith(s + "/") or s.startswith(r + "/"):
+                    raise BadRequestException(
+                        f"根路径与监听导入的源目录重叠：{root} ↔ {rule.source_path}；"
+                        "请先调整「监听导入」配置"
+                    )
 
     async def _assert_name_available(self, name: str, *, exclude_id: int | None = None) -> None:
         existing = await self._repo.get_by_name(name)
@@ -147,38 +144,22 @@ class LibraryConfigService:
         if ingest_watcher is not None:
             await ingest_watcher.refresh_watches()
 
-    async def create(
-        self,
-        *,
-        name: str,
-        kind: MediaKind,
-        root_paths: list[str],
-        ingest_dirs: list[dict] | None = None,
-    ) -> Library:
+    async def create(self, *, name: str, kind: MediaKind, root_paths: list[str]) -> Library:
         """新增一个库。该类型尚无默认库时自动成为默认。"""
-        roots, ingest = self._validate(name=name, root_paths=root_paths, ingest_dirs=ingest_dirs)
+        roots = self._validate(name=name, root_paths=root_paths)
+        await self._assert_roots_clear_of_import_watch(roots)
         await self._assert_name_available(name)
-        row = await self._repo.create(
-            name=name.strip(), kind=kind.value, root_paths=roots, ingest_dirs=ingest
-        )
+        row = await self._repo.create(name=name.strip(), kind=kind.value, root_paths=roots)
         await self._refresh_watcher()
         return row
 
-    async def update(
-        self,
-        library_id: int,
-        *,
-        name: str,
-        root_paths: list[str],
-        ingest_dirs: list[dict] | None = None,
-    ) -> Library:
-        """更新名称、根路径与下载监听目录。kind 创建后不可改（订阅按类型挂库）。"""
+    async def update(self, library_id: int, *, name: str, root_paths: list[str]) -> Library:
+        """更新名称与根路径。kind 创建后不可改（订阅按类型挂库）。"""
         await self.get(library_id)
-        roots, ingest = self._validate(name=name, root_paths=root_paths, ingest_dirs=ingest_dirs)
+        roots = self._validate(name=name, root_paths=root_paths)
+        await self._assert_roots_clear_of_import_watch(roots)
         await self._assert_name_available(name, exclude_id=library_id)
-        updated = await self._repo.update(
-            library_id, name=name.strip(), root_paths=roots, ingest_dirs=ingest
-        )
+        updated = await self._repo.update(library_id, name=name.strip(), root_paths=roots)
         assert updated is not None  # get() 已确认存在
         await self._refresh_watcher()
         return updated

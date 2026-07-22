@@ -32,9 +32,7 @@ class SystemBootstrap(SettingSchema):
     重定向到引导页；用户在向导里完成必填配置后，由系统置为 True 放行。
     """
 
-    initialized: bool = Field(
-        default=False, description="是否已完成首次引导；False 时应进入引导页"
-    )
+    initialized: bool = Field(default=False, description="是否已完成首次引导；False 时应进入引导页")
     completed_steps: list[str] = Field(
         default_factory=list, description="已完成的引导步骤标识，供向导断点续填"
     )
@@ -187,12 +185,8 @@ class SearchPresetTab(BaseModel):
     id: str = Field(description="预设标识（创建时生成的随机短 id），历史与前端引用它")
     name: str = Field(description="用户设定的展示名称")
     visible: bool = Field(default=True, description="是否在搜索分类栏中展示")
-    categories: list[str] = Field(
-        default_factory=list, description="勾选的一级分类；空 = 不限分类"
-    )
-    site_ids: list[str] = Field(
-        default_factory=list, description="勾选的站点；空 = 全部可用站点"
-    )
+    categories: list[str] = Field(default_factory=list, description="勾选的一级分类；空 = 不限分类")
+    site_ids: list[str] = Field(default_factory=list, description="勾选的站点；空 = 全部可用站点")
     poster_mode: bool = Field(
         default=False,
         description="图览模式：用该分类搜索时，结果页默认以图墙展示（结果页可临时切换）",
@@ -203,9 +197,7 @@ class SearchPresetTab(BaseModel):
     )
 
 
-SearchTab = Annotated[
-    SearchCategoryTab | SearchPresetTab, Field(discriminator="type")
-]
+SearchTab = Annotated[SearchCategoryTab | SearchPresetTab, Field(discriminator="type")]
 
 # 自定义分类数量上限：防止标签栏无限膨胀，也约束单条配置记录的体积
 MAX_SEARCH_PRESETS = 20
@@ -223,9 +215,7 @@ _DEFAULT_VISIBLE_CATEGORIES: tuple[TorrentCategory, ...] = (
 def default_search_tabs() -> list[SearchTab]:
     """默认标签列表：常用四类可见，其余（音乐/游戏/成人/其他）隐藏、排在末尾。"""
     visible = set(_DEFAULT_VISIBLE_CATEGORIES)
-    ordered = list(_DEFAULT_VISIBLE_CATEGORIES) + [
-        c for c in TorrentCategory if c not in visible
-    ]
+    ordered = list(_DEFAULT_VISIBLE_CATEGORIES) + [c for c in TorrentCategory if c not in visible]
     return [SearchCategoryTab(id=c.value, visible=c in visible) for c in ordered]
 
 
@@ -267,18 +257,14 @@ def normalize_search_tabs(tabs: list[SearchTab]) -> list[SearchTab]:
             result.append(
                 tab.model_copy(
                     update={
-                        "categories": _dedup(
-                            c for c in tab.categories if c in valid_categories
-                        ),
+                        "categories": _dedup(c for c in tab.categories if c in valid_categories),
                         "site_ids": _dedup(tab.site_ids),
                     }
                 )
             )
     for cat in TorrentCategory:
         if cat.value not in seen_categories:
-            result.append(
-                SearchCategoryTab(id=cat.value, visible=cat.value in default_visible)
-            )
+            result.append(SearchCategoryTab(id=cat.value, visible=cat.value in default_visible))
     return result
 
 
@@ -326,9 +312,7 @@ class SidebarUiPrefs(BaseModel):
     transparency: float = Field(
         default=0.0, ge=0.0, le=1.0, description="玻璃透明程度：0 标准玻璃，1 完全隐去"
     )
-    brightness: float = Field(
-        default=0.0, ge=-1.0, le=1.0, description="玻璃明暗：-1 最暗，1 最亮"
-    )
+    brightness: float = Field(default=0.0, ge=-1.0, le=1.0, description="玻璃明暗：-1 最暗，1 最亮")
     depth: float = Field(
         default=32.0, ge=10.0, le=90.0, description="玻璃厚度（边缘曲率带宽度，px）"
     )
@@ -366,12 +350,8 @@ class ScrimUiPrefs(BaseModel):
 class UiPreferencesSetting(SettingSchema):
     """全站界面样式偏好，按页面分组。新页面的设定加嵌套模型字段即可。"""
 
-    sidebar: SidebarUiPrefs = Field(
-        default_factory=SidebarUiPrefs, description="侧边栏玻璃面板"
-    )
-    scrim: ScrimUiPrefs = Field(
-        default_factory=ScrimUiPrefs, description="全站背景蒙版"
-    )
+    sidebar: SidebarUiPrefs = Field(default_factory=SidebarUiPrefs, description="侧边栏玻璃面板")
+    scrim: ScrimUiPrefs = Field(default_factory=ScrimUiPrefs, description="全站背景蒙版")
 
 
 async def get_ui_preferences() -> UiPreferencesSetting:

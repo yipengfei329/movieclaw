@@ -3,9 +3,10 @@
 与既有两条入库路径的关系（docs/design/library.md 语境）：
 - 订阅管线靠**下载器 API 轮询**确认完成后硬链入库（download_progress）；
 - 手动推送直接把 save_path 指到库内条目目录，靠库根监听发现；
-- 本模块补第三条：**任何来源**落进"下载监听目录"的文件（用户直接在
+- 本模块补第三条：**任何来源**落进监听导入源目录的文件（用户直接在
   qB 里加的种、网盘/浏览器下载等），完成后自动按规范命名搬进库。
-  监听目录独立于库根路径配置，每个目录可选搬运策略（硬链接/复制）。
+  配置是独立的「监听导入规则」（import_watch 表：源目录 → 目标库 +
+  策略），媒体库本身只有一套目录体系、不承载下载语义。
 
 完成检测（本功能的核心难点——下载开始时目录结构就已建立）：
 0. **下载器权威信号优先**：条目名能匹配到已配置下载器中的种子
@@ -77,6 +78,7 @@ from movieclaw_api.services.media_probe import probe_media
 from movieclaw_db.engine import get_database
 from movieclaw_db.models import (
     FileSource,
+    ImportWatch,
     IngestEntry,
     IngestStatus,
     Library,
@@ -183,13 +185,25 @@ def _snapshot(entry: Path) -> _EntrySnapshot:
 # ---------------------------------------------------------------------------
 
 
+async def _load_rules() -> list[tuple[ImportWatch, Library]]:
+    """全部监听导入规则及其目标库（目标库已被删除的规则由外键级联清掉）。"""
+    db = get_database()
+    async with db.session() as session:
+        result = await session.execute(
+            select(ImportWatch, Library)
+            .join(Library, ImportWatch.library_id == Library.id)  # type: ignore[arg-type]
+            .order_by(ImportWatch.id)
+        )
+        return [(rule, library) for rule, library in result.all()]
+
+
 @register_task(
     "library_ingest",
-    title="下载监听导入（兜底巡检）",
+    title="监听导入（兜底巡检）",
     trigger_type=TriggerType.INTERVAL,
     interval_seconds=FALLBACK_SWEEP_SECONDS,
     description=(
-        "低频兜底：重建失效的目录监听，并巡检监听覆盖不到的下载监听目录"
+        "低频兜底：重建失效的目录监听，并巡检监听覆盖不到的源目录"
         "（正在被实时监听的目录由事件驱动，不主动扫）。"
     ),
 )
@@ -201,20 +215,13 @@ async def ingest_tick() -> None:
         await watcher.refresh_watches()
     watched = watcher.watched_keys() if watcher is not None else frozenset()
 
-    db = get_database()
-    async with db.session() as session:
-        libraries = list((await session.execute(select(Library))).scalars().all())
-    for library in libraries:
-        for cfg in library.ingest_dirs:
-            path, strategy = cfg.get("path"), cfg.get("strategy")
-            if not path or strategy not in ("hardlink", "copy"):
-                continue  # 历史脏配置：写入侧已校验，这里静默容错
-            if (library.id, path) in watched:
-                continue  # watchdog 在实时盯着：事件路径负责，不重复主动扫
-            try:
-                await _sweep_dir(library, path, strategy)
-            except Exception:  # noqa: BLE001 -- 单目录失败不拖垮整轮
-                logger.exception("媒体库「%s」的监听目录巡检失败：%s", library.name, path)
+    for rule, library in await _load_rules():
+        if rule.source_path in watched:
+            continue  # watchdog 在实时盯着：事件路径负责，不重复主动扫
+        try:
+            await _sweep_dir(library, rule.source_path, rule.strategy)
+        except Exception:  # noqa: BLE001 -- 单目录失败不拖垮整轮
+            logger.exception("监听导入巡检失败（→「%s」）：%s", library.name, rule.source_path)
 
 
 async def _sweep_dir(library: Library, watch_root: str, strategy: str) -> None:
@@ -632,18 +639,18 @@ class IngestWatcher:
 
     def __init__(self) -> None:
         self._observer = None
-        self._queue: asyncio.Queue[tuple[int, str]] = asyncio.Queue()
+        self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._consumer: asyncio.Task | None = None
         self._catchup: asyncio.Task | None = None
         self._available = True
-        # 当前实际在监听的目录集合：兜底巡检据此跳过它们（事件路径已负责）
-        self._watched: set[tuple[int, str]] = set()
-        # 静默到点自检任务：每个监听目录至多挂一个
-        self._rechecks: dict[tuple[int, str], asyncio.Task] = {}
+        # 当前实际在监听的源目录集合：兜底巡检据此跳过它们（事件路径已负责）
+        self._watched: set[str] = set()
+        # 静默到点自检任务：每个源目录至多挂一个
+        self._rechecks: dict[str, asyncio.Task] = {}
 
-    def watched_keys(self) -> frozenset[tuple[int, str]]:
-        """实际在监听的 (库 id, 目录) 集合——兜底巡检只扫不在此列的目录。"""
+    def watched_keys(self) -> frozenset[str]:
+        """实际在监听的源目录集合——兜底巡检只扫不在此列的目录。"""
         return frozenset(self._watched)
 
     # -- 生命周期 ----------------------------------------------------------
@@ -674,7 +681,7 @@ class IngestWatcher:
             self._observer = None
 
     async def refresh_watches(self) -> None:
-        """按当前库配置重建监听（库增删改监听目录后调用）。"""
+        """按当前监听导入规则重建监听（规则增删改后调用）。"""
         if not self._available:
             return
         try:
@@ -682,40 +689,33 @@ class IngestWatcher:
             from watchdog.observers import Observer
         except ImportError:
             self._available = False
-            logger.warning("未安装 watchdog，下载监听不实时——完成的下载靠每小时兜底巡检发现")
+            logger.warning("未安装 watchdog，监听导入不实时——完成的下载靠每小时兜底巡检发现")
             return
 
-        db = get_database()
-        async with db.session() as session:
-            libraries = list((await session.execute(select(Library))).scalars().all())
+        rules = await _load_rules()
 
         watcher = self
 
         class _Handler(FileSystemEventHandler):
-            """事件回调（观察者线程）：只投递监听目录标识，不做任何业务。"""
+            """事件回调（观察者线程）：只投递源目录标识，不做任何业务。"""
 
-            def __init__(self, library_id: int, watch_root: str) -> None:
-                self._key = (library_id, watch_root)
+            def __init__(self, source_path: str) -> None:
+                self._key = source_path
 
             def on_any_event(self, event) -> None:  # noqa: ANN001
                 watcher._enqueue_threadsafe(self._key)
 
         self._stop_observer()
         observer = Observer()
-        watched: set[tuple[int, str]] = set()
-        for library in libraries:
-            assert library.id is not None
-            for cfg in library.ingest_dirs:
-                path, strategy = cfg.get("path"), cfg.get("strategy")
-                if not path or strategy not in ("hardlink", "copy"):
-                    continue
-                if not Path(path).is_dir():
-                    continue  # 目录未就绪：兜底巡检持续兜着，不告警刷屏
-                try:
-                    observer.schedule(_Handler(library.id, path), path, recursive=True)
-                    watched.add((library.id, path))
-                except OSError as exc:
-                    logger.warning("监听下载目录失败（%s）：%s", path, exc)
+        watched: set[str] = set()
+        for rule, _library in rules:
+            if not Path(rule.source_path).is_dir():
+                continue  # 目录未就绪：兜底巡检持续兜着，不告警刷屏
+            try:
+                observer.schedule(_Handler(rule.source_path), rule.source_path, recursive=True)
+                watched.add(rule.source_path)
+            except OSError as exc:
+                logger.warning("监听源目录失败（%s）：%s", rule.source_path, exc)
         # 初次纳入监听的目录补扫一次：监听建立之前完成的下载（停机期间/
         # 目录刚就绪/刚加进配置）不会再产生事件，只有这一次主动扫能接住；
         # 之后全靠事件驱动，不再主动扫它
@@ -725,13 +725,13 @@ class IngestWatcher:
             observer.daemon = True
             observer.start()
             self._observer = observer
-            logger.info("下载监听已启动：监听 %d 个目录", len(watched))
+            logger.info("监听导入已启动：监听 %d 个源目录", len(watched))
         for key in sorted(newly_watched):
             self._queue.put_nowait(key)
 
     # -- 事件通道 ----------------------------------------------------------
 
-    def _enqueue_threadsafe(self, key: tuple[int, str]) -> None:
+    def _enqueue_threadsafe(self, key: str) -> None:
         loop = self._loop
         if loop is None or loop.is_closed():
             return
@@ -752,39 +752,41 @@ class IngestWatcher:
                     break  # 安静窗口达成
                 if asyncio.get_running_loop().time() >= deadline:
                     break  # 兜底：持续有事件也要巡检
-            for library_id, watch_root in sorted(pending):
+            for source_path in sorted(pending):
                 try:
-                    await self._sweep(library_id, watch_root)
+                    await self._sweep(source_path)
                 except Exception:  # noqa: BLE001 -- 监听消费绝不崩
-                    logger.exception("事件触发的监听目录巡检失败：%s", watch_root)
+                    logger.exception("事件触发的监听目录巡检失败：%s", source_path)
 
-    async def _sweep(self, library_id: int, watch_root: str) -> None:
+    async def _sweep(self, source_path: str) -> None:
         db = get_database()
         async with db.session() as session:
-            library = await session.get(Library, library_id)
-        if library is None:
-            return
-        cfg = next((c for c in library.ingest_dirs if c.get("path") == watch_root), None)
-        if cfg is None or cfg.get("strategy") not in ("hardlink", "copy"):
-            return  # 目录已从配置移除（refresh_watches 稍后会拆掉监听）
-        await _sweep_dir(library, watch_root, cfg["strategy"])
-        self._arm_recheck(library_id, watch_root)
+            result = await session.execute(
+                select(ImportWatch, Library)
+                .join(Library, ImportWatch.library_id == Library.id)  # type: ignore[arg-type]
+                .where(ImportWatch.source_path == source_path)
+            )
+            pair = result.first()
+        if pair is None:
+            return  # 规则已删除（refresh_watches 稍后会拆掉监听）
+        rule, library = pair
+        await _sweep_dir(library, source_path, rule.strategy)
+        self._arm_recheck(source_path)
 
-    def _arm_recheck(self, library_id: int, watch_root: str) -> None:
+    def _arm_recheck(self, source_path: str) -> None:
         """仍有条目在等静默窗口时，按最近到期时间挂一次性自检。"""
-        prefix = watch_root.rstrip("/") + "/"
+        prefix = source_path.rstrip("/") + "/"
         pending = [since for path, (_fp, since) in _stability.items() if path.startswith(prefix)]
         if not pending:
             return
-        key = (library_id, watch_root)
-        existing = self._rechecks.get(key)
+        existing = self._rechecks.get(source_path)
         if existing is not None and not existing.done():
             return
         delay = min(pending) + QUIET_SECONDS - time.monotonic() + 1.0
         delay = max(5.0, min(delay, QUIET_SECONDS + 5.0))
-        self._rechecks[key] = asyncio.create_task(self._recheck_later(key, delay))
+        self._rechecks[source_path] = asyncio.create_task(self._recheck_later(source_path, delay))
 
-    async def _recheck_later(self, key: tuple[int, str], delay: float) -> None:
+    async def _recheck_later(self, key: str, delay: float) -> None:
         await asyncio.sleep(delay)
         self._queue.put_nowait(key)
 

@@ -7,21 +7,12 @@ import Link from "next/link";
 import { createPortal } from "react-dom";
 
 import { DirectoryPicker } from "@/components/directory-picker";
-import {
-  DownloadIcon,
-  FilmIcon,
-  FolderIcon,
-  MoreIcon,
-  PlusIcon,
-  TvIcon,
-  XIcon,
-} from "@/components/icons";
+import { FilmIcon, FolderIcon, MoreIcon, PlusIcon, TvIcon, XIcon } from "@/components/icons";
 import { LibraryOrganizeDialog } from "@/components/library-organize-dialog";
 import { MediaRow } from "@/components/media-row";
 import type { PosterCardAction } from "@/components/poster-card";
 import { Tooltip } from "@/components/tooltip";
 import {
-  type IngestDir,
   type LibraryItem,
   type LibraryPayload,
   type MediaLibrary,
@@ -627,9 +618,6 @@ export function LibraryFormDialog({
   const [roots, setRoots] = useState<string[]>([]);
   // 选择器目标："add"=追加新根；数字=更改该下标的既有根（原位替换）；null=关闭
   const [pickerTarget, setPickerTarget] = useState<"add" | number | null>(null);
-  // 下载监听目录列表（独立于根路径），及其目录选择器目标（同 pickerTarget 语义）
-  const [ingestDirs, setIngestDirs] = useState<IngestDir[]>([]);
-  const [ingestPicker, setIngestPicker] = useState<"add" | number | null>(null);
 
   // 每次打开时按目标重置表单（编辑带入现值，新增清空）
   useEffect(() => {
@@ -639,8 +627,6 @@ export function LibraryFormDialog({
     setName(library?.name ?? "");
     setRoots(library?.root_paths ?? []);
     setPickerTarget(null);
-    setIngestDirs(library?.ingest_dirs ?? []);
-    setIngestPicker(null);
   }, [state, library]);
 
   useEffect(() => {
@@ -657,12 +643,7 @@ export function LibraryFormDialog({
   const submit = () => {
     setBusy(true);
     setError(null);
-    const payload: LibraryPayload = {
-      name: name.trim(),
-      kind,
-      root_paths: roots,
-      ingest_dirs: ingestDirs,
-    };
+    const payload: LibraryPayload = { name: name.trim(), kind, root_paths: roots };
     void (library ? updateLibrary(library.id, payload) : createLibrary(payload))
       .then(onSaved)
       .catch((e) => setError((e as Error).message))
@@ -813,86 +794,6 @@ export function LibraryFormDialog({
             </p>
           </div>
 
-          {/* —— 下载监听目录：独立于根路径，完成的下载自动搬进主根 —— */}
-          <div>
-            <label className={labelClass}>下载监听目录（可选）</label>
-            <div className="space-y-1.5">
-              {ingestDirs.map((dir, i) => (
-                <div
-                  key={dir.path}
-                  className="group flex items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2"
-                >
-                  <DownloadIcon className="size-4 shrink-0 text-[var(--accent)]/80" />
-                  <Tooltip
-                    content={
-                      <>
-                        <p className="mb-1 break-all font-mono text-[11px] text-[var(--text-muted)]">
-                          {dir.path}
-                        </p>
-                        点击更改：从当前路径开始重新选择目录。
-                      </>
-                    }
-                  >
-                    <button
-                      type="button"
-                      dir="rtl"
-                      onClick={() => setIngestPicker(i)}
-                      className="min-w-0 flex-1 truncate rounded text-left font-mono text-[13px] text-[var(--text)] transition-colors hover:text-[var(--accent)]"
-                    >
-                      {"‎" + dir.path + "‎"}
-                    </button>
-                  </Tooltip>
-                  <Tooltip
-                    content={
-                      <>
-                        <strong>点击切换搬运策略。</strong>
-                        硬链接：秒完成、零占用、源文件继续做种，但要求监听目录与主根在同一文件系统；
-                        复制：跨盘可用，耗时且占双份空间。
-                      </>
-                    }
-                  >
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setIngestDirs(
-                          ingestDirs.map((d, idx) =>
-                            idx === i
-                              ? { ...d, strategy: d.strategy === "hardlink" ? "copy" : "hardlink" }
-                              : d,
-                          ),
-                        )
-                      }
-                      className="shrink-0 rounded-full bg-[var(--accent)]/15 px-2 py-0.5 text-[10px] font-semibold text-[var(--accent)] transition-colors hover:bg-[var(--accent)]/30"
-                    >
-                      {dir.strategy === "hardlink" ? "硬链接" : "复制"}
-                    </button>
-                  </Tooltip>
-                  <button
-                    type="button"
-                    aria-label={`移除 ${dir.path}`}
-                    onClick={() => setIngestDirs(ingestDirs.filter((_, idx) => idx !== i))}
-                    className="shrink-0 rounded-md p-1 text-[var(--text-faint)] transition-colors hover:bg-white/10 hover:text-white"
-                  >
-                    <XIcon className="size-3.5" />
-                  </button>
-                </div>
-              ))}
-              <button
-                type="button"
-                onClick={() => setIngestPicker("add")}
-                className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-white/15 px-3 py-2.5 text-[13px] font-medium text-[var(--text-muted)] transition-colors hover:border-[var(--accent)]/50 hover:text-white"
-              >
-                <PlusIcon className="size-4" />
-                添加下载监听目录
-              </button>
-            </div>
-            <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--text-faint)]">
-              监听目录里的内容<strong className="font-medium text-[var(--text-muted)]">下载完成后</strong>
-              （无下载中标记且持续静默、探测通过）自动识别并按规范命名搬进主根，源文件原地保留
-              （硬链接不占额外空间、可继续做种）。目录不能与库根路径重叠。
-            </p>
-          </div>
-
           <div className="flex items-center justify-end gap-3 pt-1">
             <button type="button" onClick={onClose} className="btn-glass h-9 px-4 text-[13px] font-medium">
               取消
@@ -933,30 +834,6 @@ export function LibraryFormDialog({
         }}
       />
 
-      {/* 下载监听目录的选择器：新目录默认硬链接策略，行内可切换 */}
-      <DirectoryPicker
-        open={ingestPicker !== null}
-        initialPath={
-          ingestPicker === "add" || ingestPicker === null
-            ? ingestDirs.length > 0
-              ? ingestDirs[ingestDirs.length - 1].path
-              : undefined
-            : ingestDirs[ingestPicker].path
-        }
-        onClose={() => setIngestPicker(null)}
-        onSelect={(path) => {
-          setIngestDirs((prev) => {
-            if (ingestPicker === "add" || ingestPicker === null) {
-              return prev.some((d) => d.path === path)
-                ? prev
-                : [...prev, { path, strategy: "hardlink" }];
-            }
-            const next = prev.map((d, idx) => (idx === ingestPicker ? { ...d, path } : d));
-            return next.filter((d, idx) => d.path !== path || idx === ingestPicker);
-          });
-          setIngestPicker(null);
-        }}
-      />
     </div>
   );
 }

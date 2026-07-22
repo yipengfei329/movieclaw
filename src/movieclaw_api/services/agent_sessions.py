@@ -162,9 +162,7 @@ class AgentSessionStore:
         修复，我们在写入侧一次做对更省事）。
         """
         _, entries, _ = self._read(self.path(session_id))
-        answered = {
-            e.message.tool_call_id for e in entries if e.message.role == "tool"
-        }
+        answered = {e.message.tool_call_id for e in entries if e.message.role == "tool"}
         sealed = 0
         for e in entries:
             for tc in e.message.tool_calls or []:
@@ -246,9 +244,7 @@ class AgentSessionStore:
                 logger.warning("会话文件无法解析，重建索引时已跳过：%s", path.name)
         return summaries
 
-    def _read(
-        self, path: Path
-    ) -> tuple[SessionHeader, list[SessionEntry], int]:
+    def _read(self, path: Path) -> tuple[SessionHeader, list[SessionEntry], int]:
         """逐行解析文件；返回（头、消息列表、坏行数）。
 
         首行必须是合法会话头（否则整个文件视为损坏抛错）；其余行坏了只跳过。

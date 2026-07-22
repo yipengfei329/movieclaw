@@ -18,10 +18,17 @@ from sqlmodel import select
 import movieclaw_api.services.library_ingest as ingest_mod
 from movieclaw_api.core.config import get_settings
 from movieclaw_api.exceptions import BadRequestException
-from movieclaw_api.services.library_config import LibraryConfigService
+from movieclaw_api.services.import_watch_config import ImportWatchConfigService
 from movieclaw_db.engine import dispose_db, get_database, init_db
 from movieclaw_db.migrations import run_migrations
-from movieclaw_db.models import IngestEntry, IngestStatus, Library, LibraryFile, MediaItem
+from movieclaw_db.models import (
+    ImportWatch,
+    IngestEntry,
+    IngestStatus,
+    Library,
+    LibraryFile,
+    MediaItem,
+)
 from movieclaw_db.repositories.library_repo import LibraryRepository
 from movieclaw_media.models import MediaKind
 
@@ -52,16 +59,19 @@ async def db(tmp_path, monkeypatch):
     get_settings.cache_clear()
 
 
-async def _make_library(db, *, kind: MediaKind, root, ingest_dirs=None) -> int:
+async def _make_library(db, *, kind: MediaKind, root) -> int:
     root.mkdir(parents=True, exist_ok=True)
     async with db.session() as session:
         row = await LibraryRepository(session).create(
-            name=f"测试{kind.value}库",
-            kind=kind.value,
-            root_paths=[str(root)],
-            ingest_dirs=ingest_dirs or [],
+            name=f"测试{kind.value}库", kind=kind.value, root_paths=[str(root)]
         )
         return row.id
+
+
+async def _make_rule(db, *, library_id: int, source, strategy="hardlink") -> None:
+    async with db.session() as session:
+        session.add(ImportWatch(source_path=str(source), strategy=strategy, library_id=library_id))
+        await session.commit()
 
 
 async def _make_item(db, *, kind: MediaKind, title: str, year: int) -> MediaItem:
@@ -370,15 +380,9 @@ async def test_fallback_only_sweeps_unwatched_dirs(db, tmp_path, monkeypatch):
     watch1, watch2 = tmp_path / "watch1", tmp_path / "watch2"
     watch1.mkdir()
     watch2.mkdir()
-    library_id = await _make_library(
-        db,
-        kind=MediaKind.MOVIE,
-        root=root,
-        ingest_dirs=[
-            {"path": str(watch1), "strategy": "hardlink"},
-            {"path": str(watch2), "strategy": "hardlink"},
-        ],
-    )
+    library_id = await _make_library(db, kind=MediaKind.MOVIE, root=root)
+    await _make_rule(db, library_id=library_id, source=watch1)
+    await _make_rule(db, library_id=library_id, source=watch2)
 
     swept: list[str] = []
 
@@ -391,7 +395,7 @@ async def test_fallback_only_sweeps_unwatched_dirs(db, tmp_path, monkeypatch):
         """只监听 watch1 的假观察者。"""
 
         def watched_keys(self):
-            return frozenset({(library_id, str(watch1))})
+            return frozenset({str(watch1)})
 
         async def refresh_watches(self):
             pass
@@ -403,23 +407,21 @@ async def test_fallback_only_sweeps_unwatched_dirs(db, tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ingest_dir_must_not_overlap_roots(db, tmp_path):
-    """配置校验：监听目录与库根路径前缀重叠直接拒绝。"""
+async def test_rule_validation(db, tmp_path):
+    """规则校验：与任何库根重叠拒绝、源目录去重、坏策略拒绝、同盘检测。"""
     root = tmp_path / "movies"
-    root.mkdir()
+    library_id = await _make_library(db, kind=MediaKind.MOVIE, root=root)
+    watch = tmp_path / "watch"
+    watch.mkdir()
     async with db.session() as session:
-        service = LibraryConfigService(session)
+        service = ImportWatchConfigService(session)
         with pytest.raises(BadRequestException):
             await service.create(
-                name="重叠库",
-                kind=MediaKind.MOVIE,
-                root_paths=[str(root)],
-                ingest_dirs=[{"path": str(root / "inbox"), "strategy": "hardlink"}],
+                source_path=str(root / "inbox"), strategy="hardlink", library_id=library_id
             )
         with pytest.raises(BadRequestException):
-            await service.create(
-                name="策略错库",
-                kind=MediaKind.MOVIE,
-                root_paths=[str(root)],
-                ingest_dirs=[{"path": str(tmp_path / "watch"), "strategy": "move"}],
-            )
+            await service.create(source_path=str(watch), strategy="move", library_id=library_id)
+        # 合法创建；同源目录再建拒绝
+        await service.create(source_path=str(watch), strategy="copy", library_id=library_id)
+        with pytest.raises(BadRequestException):
+            await service.create(source_path=str(watch), strategy="hardlink", library_id=library_id)

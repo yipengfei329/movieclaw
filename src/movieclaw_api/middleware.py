@@ -47,4 +47,3 @@ def register_middlewares(app: FastAPI, settings: Settings) -> None:
             )
 
         return response
-

@@ -11,13 +11,6 @@ from movieclaw_db.models.library import Library
 from movieclaw_media.models import MediaKind
 
 
-class IngestDirPayload(BaseModel):
-    """一个下载监听目录：路径 + 搬运策略（硬链接零占用需同盘，复制可跨盘）。"""
-
-    path: str = Field(description="监听目录绝对路径（不能与库根路径重叠）")
-    strategy: Literal["hardlink", "copy"] = Field(description="搬运策略：hardlink / copy")
-
-
 class LibraryPayload(BaseModel):
     """创建/更新库的请求体。kind 仅创建时生效，更新时忽略（创建后不可改）。"""
 
@@ -25,10 +18,6 @@ class LibraryPayload(BaseModel):
     kind: MediaKind = Field(description="媒体类型：movie / tv")
     root_paths: list[str] = Field(
         description="根路径列表（绝对路径），第一个为主根——新入库落在这里"
-    )
-    ingest_dirs: list[IngestDirPayload] = Field(
-        default_factory=list,
-        description="下载监听目录：其中下载完成的内容按策略自动搬进库主根",
     )
 
 
@@ -91,9 +80,6 @@ class LibraryView(BaseModel):
     kind: MediaKind
     root_paths: list[str]
     primary_root: str | None = Field(description="主根路径（root_paths 第一项）")
-    ingest_dirs: list[IngestDirPayload] = Field(
-        default_factory=list, description="下载监听目录配置"
-    )
     is_default: bool
     stats: LibraryStats = Field(default_factory=LibraryStats)
     scanning: bool = Field(default=False, description="是否正在扫描")
@@ -134,7 +120,6 @@ class LibraryView(BaseModel):
             kind=MediaKind(row.kind),
             root_paths=list(row.root_paths),
             primary_root=row.primary_root,
-            ingest_dirs=[IngestDirPayload(**d) for d in row.ingest_dirs],
             is_default=row.is_default,
             stats=stats or LibraryStats(),
             scanning=scanning,

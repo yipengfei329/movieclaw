@@ -36,9 +36,7 @@ def get_tmdb_client() -> TmdbClient:
                 "尚未配置 TMDB API Key，订阅功能不可用。请在 .env（或环境变量）中设置 "
                 "TMDB_API_KEY 后重启服务；Key 可在 themoviedb.org 的账户设置 → API 页免费申请"
             )
-        _tmdb_client = TmdbClient(
-            settings.tmdb_api_key, base_url=settings.tmdb_api_base_url
-        )
+        _tmdb_client = TmdbClient(settings.tmdb_api_key, base_url=settings.tmdb_api_base_url)
     return _tmdb_client
 
 

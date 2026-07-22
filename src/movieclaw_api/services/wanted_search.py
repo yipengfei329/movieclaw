@@ -208,9 +208,7 @@ async def _search_one_media(media_id: int) -> None:
         summary = await evaluate_and_dispatch(session, persisted, source="主动搜索")
 
         # 仍未满足的到期工单：计一次尝试并按退避曲线排下次
-        postponed = await _postpone_open_wanted(
-            session, media_id, delay=None, count_attempt=True
-        )
+        postponed = await _postpone_open_wanted(session, media_id, delay=None, count_attempt=True)
 
         await repo.add_activity(
             SubscriptionActivity(

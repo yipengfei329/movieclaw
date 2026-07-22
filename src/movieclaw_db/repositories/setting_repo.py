@@ -27,9 +27,7 @@ class SettingRepository:
 
     async def list_all(self) -> list[AppSetting]:
         """返回全部配置记录，按 namespace 排序，便于导出备份与管理界面展示。"""
-        result = await self._session.execute(
-            select(AppSetting).order_by(AppSetting.namespace)
-        )
+        result = await self._session.execute(select(AppSetting).order_by(AppSetting.namespace))
         return list(result.scalars().all())
 
     async def upsert(self, namespace: str, value_json: str) -> AppSetting:

@@ -56,17 +56,13 @@ class ScheduledTask(TimestampMixin, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     # 任务标识，对应 registry 中 @register_task 注册的键；一个任务一条调度记录
-    task_key: str = Field(
-        index=True, unique=True, description="任务标识，对应代码中注册的处理器键"
-    )
+    task_key: str = Field(index=True, unique=True, description="任务标识，对应代码中注册的处理器键")
     # 用户启用开关：停用后不参与调度，但保留调度定义便于随时恢复
     enabled: bool = Field(default=True, description="是否启用该定时任务")
 
     trigger_type: TriggerType = Field(description="触发方式：interval / cron")
     # INTERVAL 模式使用：两次触发之间的秒数
-    interval_seconds: int | None = Field(
-        default=None, description="INTERVAL 模式：间隔秒数"
-    )
+    interval_seconds: int | None = Field(default=None, description="INTERVAL 模式：间隔秒数")
     # CRON 模式使用：标准 5 段 cron 表达式（分 时 日 月 周），交给 APScheduler 解析
     cron_expr: str | None = Field(
         default=None, description="CRON 模式：5 段 cron 表达式，如 '0 3 * * *'"
@@ -98,12 +94,8 @@ class TaskRun(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     # 冗余存 task_key（不做外键）：即便对应的调度定义被删，历史仍可独立留存与查询
     task_key: str = Field(index=True, description="任务标识")
-    status: TaskRunStatus = Field(
-        default=TaskRunStatus.RUNNING, index=True, description="执行状态"
-    )
-    started_at: datetime = Field(
-        default_factory=utcnow, index=True, description="开始执行时间"
-    )
+    status: TaskRunStatus = Field(default=TaskRunStatus.RUNNING, index=True, description="执行状态")
+    started_at: datetime = Field(default_factory=utcnow, index=True, description="开始执行时间")
     finished_at: datetime | None = Field(default=None, description="执行结束时间")
     # 执行耗时（毫秒），成功/失败均记录，便于观察任务是否变慢
     duration_ms: int | None = Field(default=None, description="执行耗时（毫秒）")

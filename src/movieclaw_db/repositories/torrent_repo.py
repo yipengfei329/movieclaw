@@ -149,7 +149,7 @@ class UpsertStats(BaseModel):
     """一批 upsert 的统计，供同步任务更新游标与自适应节奏。"""
 
     inserted: int = 0  # 新入库（此前不存在）
-    updated: int = 0   # 命中已有并刷新
+    updated: int = 0  # 命中已有并刷新
 
 
 class TorrentRepository:
@@ -293,7 +293,7 @@ class TorrentRepository:
         # 静态层：补空——仅当旧值为空且本次有值才填
         for name in self._STATIC_FILL_FIELDS:
             new_val = getattr(obs, name)
-            if new_val in (None, "") :
+            if new_val in (None, ""):
                 continue
             if _is_empty(getattr(row, name)):
                 setattr(row, name, new_val)
@@ -309,9 +309,7 @@ class TorrentRepository:
         row.source = obs.source
         row.updated_at = now
 
-    def _apply_volatile(
-        self, row: SiteTorrent, obs: TorrentObservation, now: datetime
-    ) -> None:
+    def _apply_volatile(self, row: SiteTorrent, obs: TorrentObservation, now: datetime) -> None:
         """写入易变层：只覆盖本次观测到（非 None）的字段。"""
         for name in self._VOLATILE_FIELDS:
             new_val = getattr(obs, name)
@@ -336,9 +334,7 @@ class TorrentRepository:
             row.attrs = obs.attrs
             row.enrich_version = obs.enrich_version
 
-    def _apply_detail(
-        self, row: SiteTorrent, obs: TorrentObservation, now: datetime
-    ) -> None:
+    def _apply_detail(self, row: SiteTorrent, obs: TorrentObservation, now: datetime) -> None:
         """写入详情层：补空 imdb/douban，记录富化时间。"""
         if obs.imdb_id:
             row.imdb_id = obs.imdb_id
@@ -372,10 +368,10 @@ class TorrentRepository:
         整站清理符合预期。
         """
         rows = (
-            await self._session.execute(
-                select(SiteTorrent).where(SiteTorrent.site_id == site_id)
-            )
-        ).scalars().all()
+            (await self._session.execute(select(SiteTorrent).where(SiteTorrent.site_id == site_id)))
+            .scalars()
+            .all()
+        )
         for row in rows:
             await self._session.delete(row)
         cursor = await self.get_cursor(site_id)
@@ -410,8 +406,7 @@ class TorrentRepository:
             cursor.last_success_at = now
         # 高水位线只增不减：新观测更晚才前移
         if newest_publish_time is not None and (
-            cursor.newest_publish_time is None
-            or newest_publish_time > cursor.newest_publish_time
+            cursor.newest_publish_time is None or newest_publish_time > cursor.newest_publish_time
         ):
             cursor.newest_publish_time = newest_publish_time
             cursor.newest_torrent_id = newest_torrent_id

@@ -34,9 +34,7 @@ class ScheduledTaskRepository:
 
     async def list_all(self) -> list[ScheduledTask]:
         """返回所有调度定义（含已停用），按 task_key 排序，便于管理界面展示。"""
-        result = await self._session.execute(
-            select(ScheduledTask).order_by(ScheduledTask.task_key)
-        )
+        result = await self._session.execute(select(ScheduledTask).order_by(ScheduledTask.task_key))
         return list(result.scalars().all())
 
     async def list_enabled(self) -> list[ScheduledTask]:
@@ -155,9 +153,7 @@ class TaskRunRepository:
 
     async def purge_older_than(self, cutoff: datetime) -> int:
         """删除 started_at 早于 cutoff 的历史记录，返回删除条数。"""
-        result = await self._session.execute(
-            sa_delete(TaskRun).where(TaskRun.started_at < cutoff)
-        )
+        result = await self._session.execute(sa_delete(TaskRun).where(TaskRun.started_at < cutoff))
         await self._session.commit()
         return result.rowcount or 0
 
