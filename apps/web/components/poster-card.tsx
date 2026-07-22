@@ -3,7 +3,7 @@
 import type { Route } from "next";
 import Link from "next/link";
 
-import { PlayIcon, StarIcon } from "@/components/icons";
+import { CheckIcon, PlayIcon, StarIcon } from "@/components/icons";
 import { PosterImage } from "@/components/poster-image";
 import { useSubscribeEntry } from "@/components/subscribe-entry";
 import { useMediaDetail } from "@/lib/media-detail";
@@ -30,7 +30,9 @@ export interface PosterCardProps {
 
 /**
  * 悬浮层操作区的三种形态，按内容与用户的关系选择：
- * - subscribe：还没拥有（发现页/搜索），给「订阅影片」入口；
+ * - subscribe：还没拥有（发现页/搜索），给「订阅影片」入口；该影片已存在订阅时
+ *   自动切换为「已订阅」状态徽标（点击进入订阅管理弹层），状态来自
+ *   SubscribeEntryProvider 的全站订阅列表，卡片自身不发请求；
  * - owned：已在媒体库（库首页最近添加、单库库存墙），订阅无意义，改为「已入库」标识；
  * - none：已订阅但尚未落地（单库页「追踪中」），再给订阅按钮是重复操作，不显示。
  */
@@ -109,7 +111,9 @@ function PosterCardContent({
   rank?: number;
   action?: PosterCardAction;
 }) {
-  const { open: openSubscribe } = useSubscribeEntry();
+  const { open: openSubscribe, subscriptionOf } = useSubscribeEntry();
+  // 仅 subscribe 变体需要判断订阅状态；owned/none 场景（媒体库）不查询
+  const existingSub = action === "subscribe" ? subscriptionOf(item) : undefined;
   const badges = item.badges ?? [];
   const genres = item.genres ?? [];
   const overview = item.overview ?? "";
@@ -172,13 +176,16 @@ function PosterCardContent({
             {action !== "none" && (
               <div className="mt-2.5 flex items-center gap-2">
                 {action === "subscribe" ? (
-                  /* 未拥有的内容才给订阅入口（打开订阅弹层）。外层整卡是
-                     button/Link，内层不能再嵌 button，用 role=button 的 span 承载；
+                  /* 订阅入口（打开订阅弹层）。已订阅时切换为状态徽标，点击进入
+                     同一弹层的管理态（可调整/取消订阅）。外层整卡是 button/Link，
+                     内层不能再嵌 button，用 role=button 的 span 承载；
                      preventDefault 拦掉 Link 跳转，stopPropagation 拦掉整卡 onClick。 */
                   <span
                     role="button"
                     tabIndex={0}
-                    aria-label={`订阅《${item.title}》`}
+                    aria-label={
+                      existingSub ? `管理《${item.title}》的订阅` : `订阅《${item.title}》`
+                    }
                     onClick={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
@@ -191,10 +198,23 @@ function PosterCardContent({
                         void openSubscribe(item);
                       }
                     }}
-                    className="btn-accent flex h-7 items-center gap-1 rounded-full px-3 text-[11px] font-semibold"
+                    className={
+                      existingSub
+                        ? "flex h-7 items-center gap-1.5 rounded-full bg-white/[0.14] px-3 text-[11px] font-semibold text-white/90 backdrop-blur-sm transition-colors hover:bg-white/[0.22]"
+                        : "btn-accent flex h-7 items-center gap-1 rounded-full px-3 text-[11px] font-semibold"
+                    }
                   >
-                    <PlayIcon className="size-3" />
-                    订阅影片
+                    {existingSub ? (
+                      <>
+                        <CheckIcon className="size-3 text-[#4ade80]" />
+                        已订阅
+                      </>
+                    ) : (
+                      <>
+                        <PlayIcon className="size-3" />
+                        订阅影片
+                      </>
+                    )}
                   </span>
                 ) : (
                   /* 已入库标识：非交互，与库存格下方的绿点语言一致 */

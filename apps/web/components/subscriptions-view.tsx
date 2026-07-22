@@ -123,11 +123,12 @@ function MediaTypeSwitcher({
   );
 }
 
-/** 把订阅条目摘要适配成海报卡片的视觉契约。 */
+/** 把订阅条目摘要适配成海报卡片的视觉契约（带 type，悬浮层自动显示「已订阅」）。 */
 function toVisualItem(sub: Subscription): PosterVisualItem {
   return {
     id: String(sub.media.tmdb_id),
     source: "tmdb",
+    type: sub.media.kind,
     title: sub.media.title,
     year: sub.media.year ?? undefined,
     rating: 0,

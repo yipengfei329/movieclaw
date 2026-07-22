@@ -22,7 +22,7 @@ import {
   type MediaDetailData,
   type MediaImage,
 } from "@/lib/api/discover";
-import { listSubscriptions, type Subscription } from "@/lib/api/subscriptions";
+import { useSubscribeEntry } from "@/components/subscribe-entry";
 import { useBackdrop } from "@/lib/backdrop";
 import { getMediaSeed, useMediaDetail } from "@/lib/media-detail";
 import type { MediaSource, MediaType } from "@/lib/media-types";
@@ -59,29 +59,12 @@ export function MediaDetailView({
   const [detail, setDetail] = useState<MediaDetailData | null>(null);
   // 详情拉取失败状态：仅在无 seed（硬刷新/分享直达）时才需要整页兜底
   const [loadFailed, setLoadFailed] = useState(false);
-  // 该条目的订阅（从订阅列表按外部 ID 匹配；订阅/取消后重新拉取）
-  const [sub, setSub] = useState<Subscription | undefined>(undefined);
+  // 该条目的订阅：与海报卡片同一份全站订阅状态（subscribe-entry 收口），
+  // 订阅/取消后 refresh 一次，详情页与所有卡片同步更新
+  const { subscriptionOf, refresh: refreshSubscriptions } = useSubscribeEntry();
+  const sub = subscriptionOf({ id, source, type: type ?? "movie" });
   // 订阅弹层的打开参数；null = 关闭
   const [subscribeTarget, setSubscribeTarget] = useState<SubscribeTarget | null>(null);
-
-  const reloadSubscription = useCallback(() => {
-    listSubscriptions()
-      .then((rows) =>
-        setSub(
-          rows.find((s) =>
-            source === "douban"
-              ? s.media.douban_id === id
-              : s.media.kind === (type ?? "movie") && String(s.media.tmdb_id) === id,
-          ),
-        ),
-      )
-      .catch(() => setSub(undefined));
-  }, [id, source, type]);
-
-  useEffect(() => {
-    setSub(undefined);
-    reloadSubscription();
-  }, [reloadSubscription]);
   // 站内点卡片跳转时预存的列表字段（标题/海报/简介），用于首屏零白屏；
   // 硬刷新 / 分享链接直达时为空，此时全靠 /discover/{type}/{id} 拉取。
   const listItem = getMediaSeed(source, id);
@@ -267,7 +250,7 @@ export function MediaDetailView({
       <SubscribeDialog
         target={subscribeTarget}
         onClose={() => setSubscribeTarget(null)}
-        onChanged={reloadSubscription}
+        onChanged={refreshSubscriptions}
       />
 
       {/* —— 3. 剧情简介 + 词条信息 —— */}
