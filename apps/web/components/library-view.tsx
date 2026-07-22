@@ -9,6 +9,7 @@ import { createPortal } from "react-dom";
 import { DirectoryPicker } from "@/components/directory-picker";
 import { FilmIcon, FolderIcon, MoreIcon, PlusIcon, TvIcon, XIcon } from "@/components/icons";
 import { MediaRow } from "@/components/media-row";
+import type { PosterCardAction } from "@/components/poster-card";
 import { Tooltip } from "@/components/tooltip";
 import {
   type LibraryItem,
@@ -33,6 +34,20 @@ export const LIBRARY_KIND_META: Record<MediaType, { label: string; Icon: typeof 
   movie: { label: "电影", Icon: FilmIcon },
   tv: { label: "剧集", Icon: TvIcon },
 };
+
+/**
+ * 库存条目的悬浮操作三分支（库首页「最近添加」行与单库库存墙共用）：
+ *   - 在播剧 → 订阅追新（还会有新集，转化价值最高；已订阅时卡片自动显「已订阅」）；
+ *   - 完结剧且已播集有缺口 → 补齐缺集（整季没下过的内容不在文件台账里，
+ *     「缺失重下」够不着，建订阅是唯一补齐路径；订阅按 E−H 只补缺的集）；
+ *   - 其余（电影 / 完结齐全 / 播出状态未知）→ 静态「已入库」标识，不给死按钮。
+ */
+export function libraryCardAction(item: LibraryItem): PosterCardAction {
+  if (item.kind !== "tv") return "owned";
+  if (item.air_status === "airing") return "follow";
+  if (item.air_status === "ended" && item.missing_episode_count > 0) return "backfill";
+  return "owned";
+}
 
 /**
  * 订阅的实际归属库：显式指定优先，否则该类型的默认库。
@@ -95,16 +110,24 @@ export function LibraryView() {
     return () => clearInterval(timer);
   }, [scanningAny, reload]);
 
-  // 每个非空库一行「最近添加」：按最近入账时间倒序取前 20，
-  // 复用发现页的横滚海报行（点击进详情、悬浮可订阅），把首页铺满
+  // 每个非空库一行「最近添加」：按最近入账时间倒序取前 20，复用发现页的
+  // 横滚海报行；悬浮动作按条目三分支（追新/补齐/已入库，见 libraryCardAction）
   const recentRows = useMemo(
     () =>
       (libraries ?? [])
         .map((library) => {
-          const items = [...(itemsByLibrary.get(library.id) ?? [])]
+          const recent = [...(itemsByLibrary.get(library.id) ?? [])]
             .sort((a, b) => (b.added_at ?? "").localeCompare(a.added_at ?? ""))
             .slice(0, 20);
-          return { library, items: items.map(libraryItemToMediaItem) };
+          // MediaItem.id 即 tmdb_id 字符串，库类型固定故同行内唯一，可作动作映射键
+          const actions = new Map(
+            recent.map((it) => [String(it.tmdb_id), libraryCardAction(it)]),
+          );
+          return {
+            library,
+            items: recent.map(libraryItemToMediaItem),
+            actionOf: (m: MediaItem) => actions.get(m.id) ?? ("owned" as const),
+          };
         })
         .filter((row) => row.items.length > 0),
     [libraries, itemsByLibrary],
@@ -175,7 +198,7 @@ export function LibraryView() {
       {/* —— 最近添加：Emby 首页式分区，每个非空库一行横滚海报 —— */}
       {recentRows.length > 0 && (
         <div className="mt-10 space-y-8">
-          {recentRows.map(({ library, items }) => (
+          {recentRows.map(({ library, items, actionOf }) => (
             <MediaRow
               key={library.id}
               row={{
@@ -185,7 +208,7 @@ export function LibraryView() {
               }}
               moreHref={`/library/${library.id}` as Route}
               moreLabel="查看全部"
-              cardAction="owned"
+              cardAction={actionOf}
             />
           ))}
         </div>

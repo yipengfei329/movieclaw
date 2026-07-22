@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_serializer
 
@@ -102,6 +103,22 @@ class LibraryView(BaseModel):
         )
 
 
+# TMDB status 原值 → 播出状态两分类（剧集海报悬浮操作的判断依据）。
+# 映射外的未知值不猜——返回 None，前端降级为静态「已入库」标识，
+# 不给出错误的「订阅追新 / 补齐缺集」入口。
+_AIRING_STATUSES = frozenset({"Returning Series", "In Production", "Planned", "Pilot"})
+_ENDED_STATUSES = frozenset({"Ended", "Canceled"})
+
+
+def derive_air_status(status: str | None) -> Literal["airing", "ended"] | None:
+    """剧集 TMDB status 原值收敛为 airing（还会有新集）/ ended（不会再有）。"""
+    if status in _AIRING_STATUSES:
+        return "airing"
+    if status in _ENDED_STATUSES:
+        return "ended"
+    return None
+
+
 class LibraryItemView(BaseModel):
     """库内一个媒体条目的库存聚合（单库海报墙的一格）。"""
 
@@ -119,6 +136,16 @@ class LibraryItemView(BaseModel):
     # 去重的介质规格标签（如 ["2160p","1080p"]），探测不到为空
     resolutions: list[str]
     missing_count: int = Field(description="标记 missing 的文件数（>0 时前端提示）")
+    # 剧集海报悬浮操作的两个判断依据（前端三分支：在播→订阅追新 /
+    # 完结缺集→补齐缺集 / 完结齐全或电影→已入库）
+    air_status: Literal["airing", "ended"] | None = Field(
+        default=None,
+        description="剧集播出状态：airing=在播 / ended=完结；电影或状态未知为 NULL",
+    )
+    missing_episode_count: int = Field(
+        default=0,
+        description="已播出但库里没有的正季集数（电影恒 0）——「补齐缺集」的依据",
+    )
     added_at: datetime | None = Field(
         default=None, description="最近一次文件入账时间（首页「最近添加」排序依据）"
     )

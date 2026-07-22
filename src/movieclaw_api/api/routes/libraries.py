@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -20,6 +22,7 @@ from movieclaw_api.schemas.library import (
     ScanResultView,
     UnidentifiedClearPayload,
     UnidentifiedFileView,
+    derive_air_status,
 )
 from movieclaw_api.schemas.response import ApiResponse, ok
 from movieclaw_api.services.library_config import LibraryConfigService
@@ -32,7 +35,7 @@ from movieclaw_api.services.library_scan import (
 from movieclaw_api.services.media_discover import get_tmdb_client
 from movieclaw_api.services.media_library import MediaLibraryService
 from movieclaw_db.engine import get_session
-from movieclaw_db.models import LibraryFile, MediaItem
+from movieclaw_db.models import LibraryFile, MediaItem, MediaSeason, utcnow
 from movieclaw_db.repositories.library_file_repo import LibraryFileRepository
 from movieclaw_media.models import MediaKind
 
@@ -269,10 +272,48 @@ async def list_library_items(
         assert item.id is not None
         grouped.setdefault(item.id, (item, []))[1].append(file)
 
+    # 剧集的已播单元集合：海报悬浮操作（订阅追新/补齐缺集）的判断依据。
+    # 季集结构在条目建档时已落库（media_season），一次批量查询本地即得，
+    # 不打 TMDB。特别季不参与缺集统计——订阅默认也不追特别季，口径一致。
+    tv_item_ids = [i for i, (item, _) in grouped.items() if item.kind == "tv"]
+    aired_by_item: dict[int, set[tuple[int, int]]] = {}
+    if tv_item_ids:
+        season_rows = (
+            (
+                await session.execute(
+                    select(MediaSeason).where(MediaSeason.media_item_id.in_(tv_item_ids))  # type: ignore[attr-defined]
+                )
+            )
+            .scalars()
+            .all()
+        )
+        today = utcnow().date()
+        for season in season_rows:
+            if season.season_number == 0:
+                continue
+            aired = aired_by_item.setdefault(season.media_item_id, set())
+            for episode in season.episodes:
+                number = episode.get("episode_number")
+                raw = episode.get("air_date")
+                try:
+                    if number is not None and raw and date.fromisoformat(raw) <= today:
+                        aired.add((season.season_number, number))
+                except ValueError:
+                    continue
+
     base = get_settings().tmdb_image_base_url.rstrip("/")
     views = []
     for item, files in grouped.values():
         units = {(f.season_number, f.episode_number) for f in files}
+        if item.kind == "tv":
+            # 缺集口径与订阅创建的 E−H 一致：已播 − 在位（missing 的文件不算拥有），
+            # 因此「补齐缺集」建订阅后恰好只为这些集生成工单
+            present = {
+                (f.season_number, f.episode_number) for f in files if f.missing_since is None
+            }
+            missing_episodes = len(aired_by_item.get(item.id, set()) - present)  # type: ignore[arg-type]
+        else:
+            missing_episodes = 0
         views.append(
             LibraryItemView(
                 media_item_id=item.id,  # type: ignore[arg-type]
@@ -287,6 +328,8 @@ async def list_library_items(
                 episode_count=len(units) if item.kind == "tv" else 0,
                 resolutions=sorted({f.resolution for f in files if f.resolution}, reverse=True),
                 missing_count=sum(1 for f in files if f.missing_since is not None),
+                air_status=derive_air_status(item.status) if item.kind == "tv" else None,
+                missing_episode_count=missing_episodes,
                 added_at=max(f.created_at for f in files),
             )
         )

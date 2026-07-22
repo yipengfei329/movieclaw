@@ -86,6 +86,10 @@ export interface LibraryItem {
   resolutions: string[];
   /** 标记 missing 的文件数（>0 时提示） */
   missing_count: number;
+  /** 剧集播出状态：airing=在播 / ended=完结；电影或状态未知为 null */
+  air_status: "airing" | "ended" | null;
+  /** 已播出但库里没有的正季集数（电影恒 0）——「补齐缺集」的依据 */
+  missing_episode_count: number;
   /** 最近一次文件入账时间（ISO 字符串），首页「最近添加」排序依据 */
   added_at: string | null;
 }

@@ -11,6 +11,7 @@ import {
   LIBRARY_KIND_META,
   LibraryFormDialog,
   effectiveLibraryId,
+  libraryCardAction,
 } from "@/components/library-view";
 import { PosterCardVisual, type PosterVisualItem } from "@/components/poster-card";
 import {
@@ -346,7 +347,7 @@ function InventoryCell({ item }: { item: LibraryItem }) {
         <PosterCardVisual
           item={visual}
           href={`/media/${item.kind}/${item.tmdb_id}` as Route}
-          action="owned"
+          action={libraryCardAction(item)}
         />
       </div>
       <p className="text-on-image mt-1.5 flex items-center gap-1.5 truncate text-[11px] text-[var(--text-muted)]">
