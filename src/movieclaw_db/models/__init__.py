@@ -14,6 +14,7 @@ from movieclaw_db.models.base import TimestampMixin, utcnow
 from movieclaw_db.models.cache_entry import CacheEntry
 from movieclaw_db.models.download_hint import DownloadHint
 from movieclaw_db.models.downloader_client import ClientType, DownloaderClient
+from movieclaw_db.models.ingest_entry import IngestEntry, IngestStatus
 from movieclaw_db.models.library import Library
 from movieclaw_db.models.library_file import FileSource, LibraryFile
 from movieclaw_db.models.llm_provider import LlmProvider
@@ -60,6 +61,8 @@ __all__ = [
     "DownloadHint",
     "DownloaderClient",
     "FileSource",
+    "IngestEntry",
+    "IngestStatus",
     "Library",
     "LibraryFile",
     "LlmProvider",

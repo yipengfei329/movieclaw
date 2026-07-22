@@ -99,6 +99,7 @@ def build_lifespan(settings: Settings):
         if settings.scheduler_enabled:
             from movieclaw_api.services import (  # noqa: F401  订阅管线三任务注册  # noqa: F401  下载完成检测与入库任务注册  # noqa: F401  媒体库对账任务注册
                 download_progress,
+                library_ingest,  # noqa: F401  下载监听导入任务注册
                 library_scan,
                 media_refresh,
                 torrent_matcher,

@@ -217,7 +217,12 @@ async def create_library(
     session: AsyncSession = Depends(get_session),
 ) -> ApiResponse[LibraryView]:
     service = LibraryConfigService(session)
-    row = await service.create(name=payload.name, kind=payload.kind, root_paths=payload.root_paths)
+    row = await service.create(
+        name=payload.name,
+        kind=payload.kind,
+        root_paths=payload.root_paths,
+        ingest_dirs=[d.model_dump() for d in payload.ingest_dirs],
+    )
     return ok(LibraryView.from_model(row), message=f"已创建媒体库「{row.name}」")
 
 
@@ -232,7 +237,12 @@ async def update_library(
     session: AsyncSession = Depends(get_session),
 ) -> ApiResponse[LibraryView]:
     service = LibraryConfigService(session)
-    row = await service.update(library_id, name=payload.name, root_paths=payload.root_paths)
+    row = await service.update(
+        library_id,
+        name=payload.name,
+        root_paths=payload.root_paths,
+        ingest_dirs=[d.model_dump() for d in payload.ingest_dirs],
+    )
     return ok(LibraryView.from_model(row), message="已更新")
 
 
