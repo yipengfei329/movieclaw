@@ -4,7 +4,7 @@
 会一直保持原来杂乱的名字。本模块补上"让库变规整"的主动能力：
 
   台账在位文件 → 计算规范目标路径（与入库管线同一套命名模板）
-    ``{所在根}/{标题 (年份)}[/Season NN]/{标题 (年份)[ - SxxEyy]}.ext``
+    ``{所在根}/{标题 (年份)}[/Season NN]/{标题 (年份)[ - SxxEyy][ - 版本标签]}.ext``
   → 用户在前端预览确认 → 逐文件改名 + 台账路径随迁 → 清理搬空的目录
 
 设计决策：
@@ -18,7 +18,12 @@
 - **逐文件收口**：每改名成功一个立即随迁台账（repo.relocate），中途失败
   不会留下"账实不符"的批量烂摊子，单文件失败记入 errors 不断整轮；
 - **只清理自己搬空的目录**：改名后仅对被搬走文件的原目录（及其空祖先）
-  尝试 rmdir——非空即停，绝不触碰与本次整理无关的目录，绝不删除文件。
+  尝试 rmdir——非空即停，绝不触碰与本次整理无关的目录，绝不删除文件；
+- **多版本按播放器规范命名**：同条目多个版本（1080p 与 2160p 并存）落
+  同一条目目录，文件名加 `` - 版本标签`` 后缀（如 ``标题 (年份) - 2160p.ext``）
+  ——Emby / Plex / Jellyfin 都按此约定把它们归组为同一影片的不同版本。
+  标签优先取分辨率，撞车时逐级追加片源/发布组，全部探测不到退回按文件
+  大小编号（V1/V2…）；标签推导是确定性的，重跑整理不会来回改名。
 
 与其他任务的互斥（仔细评估的结论）：
 - **与扫描双向互斥**：扫描的改名归并（_try_relink）用"旧路径消失 + 新路径
@@ -46,6 +51,7 @@ from pathlib import Path
 
 from sqlmodel import select
 
+from movieclaw_api.services.library_config import sanitize_folder_name
 from movieclaw_api.services.library_import import VIDEO_EXTS, _entry_base_name
 from movieclaw_db.engine import get_database
 from movieclaw_db.models import Library, LibraryFile, MediaItem, utcnow
@@ -107,6 +113,10 @@ class RenameAction:
     source_rel: str
     target_rel: str
     size_bytes: int
+    # 版本标签素材（多版本同名时用来生成 " - 2160p" 这类后缀）
+    resolution: str | None = None
+    media_source: str | None = None
+    release_group: str | None = None
     sidecars: list[SidecarMove] = field(default_factory=list)
 
 
@@ -206,33 +216,87 @@ def _build_plan_sync(
                 source_rel=row.file_path[len(root) + 1 :],
                 target_rel=str(target)[len(root) + 1 :],
                 size_bytes=row.size_bytes,
+                resolution=row.resolution,
+                media_source=row.media_source,
+                release_group=row.release_group,
             )
         )
 
-    # 冲突检查：多个文件算出同一规范名（同条目多版本最常见）全部跳过，
-    # 目标已被磁盘上的其他文件占用也跳过——宁可留乱，绝不覆盖
+    # 同名处理：多个文件算出同一规范名 = 同条目多版本，按 Emby/Plex 的
+    # 多版本约定加 " - 版本标签" 后缀落同一目录归组；规范名被同条目的
+    # 在位文件占用时，本文件同样作为附加版本加标签。加标签后仍撞车、
+    # 或目标被无关文件占用则跳过——宁可留乱，绝不覆盖
+    in_place_item: dict[str, int] = {
+        row.file_path: item.id
+        for row, item in rows
+        if item is not None and item.id is not None and row.missing_since is None
+    }
     by_target: dict[str, list[RenameAction]] = {}
     for action in candidates:
         by_target.setdefault(action.target_path, []).append(action)
+    taken: set[str] = set()
     for target, actions in by_target.items():
         if len(actions) > 1:
-            for action in actions:
+            for action, label in zip(actions, _version_labels(actions), strict=True):
+                _apply_version_label(action, label)
+        elif in_place_item.get(target) == actions[0].media_item_id:
+            # 规范名的占用者是同条目的在位文件（already_ok 的那份保持无标签，
+            # Emby/Plex 按相同基础名照样归组）→ 本文件作为附加版本
+            _apply_version_label(actions[0], _attr_label(actions[0]) or "V2")
+        for action in actions:
+            if action.target_path == action.source_path:
+                plan.already_ok += 1  # 上一轮整理已加过标签的版本文件（幂等）
+                continue
+            if action.target_path in taken or Path(action.target_path).exists():
                 plan.skips.append(
-                    SkipEntry(
-                        action.source_path,
-                        f"与其他 {len(actions) - 1} 个文件的规范名相同"
-                        "（同一条目的多版本），请手动处理",
-                    )
+                    SkipEntry(action.source_path, "目标路径已存在同名文件，跳过以免覆盖")
                 )
-            continue
-        action = actions[0]
-        if Path(target).exists():
-            plan.skips.append(SkipEntry(action.source_path, "目标路径已存在同名文件，跳过以免覆盖"))
-            continue
-        action.sidecars = _find_sidecars(action)
-        plan.renames.append(action)
+                continue
+            taken.add(action.target_path)
+            action.sidecars = _find_sidecars(action)
+            plan.renames.append(action)
     plan.renames.sort(key=lambda a: a.target_path)
     return plan
+
+
+def _version_labels(actions: list[RenameAction]) -> list[str]:
+    """为同名多版本生成互不相同的版本标签。
+
+    逐级增加信息量直到组内唯一：分辨率 → +片源 → +发布组；三级都无法
+    区分（探测/解析信息缺失）退回按文件大小从大到小编号（V1/V2…）。
+    每一级都是确定性的，重跑整理时标签不变、不会来回改名。
+    """
+    picks = (
+        lambda a: [a.resolution],
+        lambda a: [a.resolution, a.media_source],
+        lambda a: [a.resolution, a.media_source, a.release_group],
+    )
+    for pick in picks:
+        raw = [" ".join(p for p in pick(a) if p) for a in actions]
+        if all(raw) and len(set(raw)) == len(raw):
+            return [sanitize_folder_name(label) for label in raw]
+    order = sorted(
+        range(len(actions)), key=lambda i: (-actions[i].size_bytes, actions[i].source_path)
+    )
+    labels = [""] * len(actions)
+    for rank, index in enumerate(order, start=1):
+        labels[index] = f"V{rank}"
+    return labels
+
+
+def _attr_label(action: RenameAction) -> str | None:
+    """单个附加版本的标签：分辨率优先，缺失退片源/发布组；全缺返回 None。"""
+    raw = action.resolution or action.media_source or action.release_group
+    return sanitize_folder_name(raw) if raw else None
+
+
+def _apply_version_label(action: RenameAction, label: str) -> None:
+    """把版本标签织入目标文件名：``…/标题 (年份)[ - SxxEyy] - 标签.ext``。"""
+    dst = Path(action.target_path)
+    named = dst.with_name(f"{dst.stem} - {label}{dst.suffix}")
+    root_len = len(action.target_path) - len(action.target_rel)
+    action.target_path = str(named)
+    action.target_rel = str(named)[root_len:]
 
 
 def _root_of(roots: list[str], file_path: str) -> str | None:

@@ -1,8 +1,9 @@
 """整理器（存量规范化）的测试。
 
-覆盖：电影/剧集的规范目标路径计算、跳过规则（待识别/缺集号/多版本冲突/
-目标被占用/原盘目录/缺失文件不参与）、执行后的物理改名 + 附属文件随迁 +
-台账路径随迁 + 搬空目录清理、与扫描的双向互斥。
+覆盖：电影/剧集的规范目标路径计算、多版本按 Emby/Plex 约定加版本标签
+（分辨率标签/大小编号兜底/幂等重跑/并入已有规范文件）、跳过规则（待识别/
+缺集号/目标被无关文件占用/缺失文件不参与）、执行后的物理改名 + 附属文件
+随迁 + 台账路径随迁 + 搬空目录清理、与扫描的双向互斥。
 """
 
 from __future__ import annotations
@@ -49,7 +50,9 @@ async def _make_item(session, *, kind: MediaKind, tmdb_id: int, title: str, year
     return item
 
 
-def _add_file(session, library, item, path, *, season=0, episode=0, missing=False) -> LibraryFile:
+def _add_file(
+    session, library, item, path, *, season=0, episode=0, missing=False, resolution=None
+) -> LibraryFile:
     row = LibraryFile(
         library_id=library.id,
         media_item_id=item.id if item else None,
@@ -57,6 +60,7 @@ def _add_file(session, library, item, path, *, season=0, episode=0, missing=Fals
         episode_number=episode,
         file_path=str(path),
         size_bytes=path.stat().st_size if path.exists() else 0,
+        resolution=resolution,
         source=FileSource.SCANNED,
         missing_since=utcnow() if missing else None,
     )
@@ -66,7 +70,7 @@ def _add_file(session, library, item, path, *, season=0, episode=0, missing=Fals
 
 @pytest.mark.asyncio
 async def test_movie_plan_targets_and_skips(db, tmp_path):
-    """电影库：散乱文件 → 规范路径；待识别/缺失/多版本冲突/目标被占用各得其所。"""
+    """电影库：散乱文件 → 规范路径；多版本加分辨率标签；待识别/缺失各得其所。"""
     root = tmp_path / "movies"
     async with db.session() as session:
         library = await _make_library(session, kind=MediaKind.MOVIE, root=root)
@@ -96,13 +100,13 @@ async def test_movie_plan_targets_and_skips(db, tmp_path):
         tidy_file.write_bytes(b"ok")
         _add_file(session, library, tidy, tidy_file)
 
-        # 同条目两个同容器版本 → 规范名相同 → 双双跳过
+        # 同条目两个同容器版本 → 按 Emby/Plex 约定加分辨率标签落同一目录
         v1 = root / "双版本.v1.mkv"
         v2 = root / "双版本.v2.mkv"
         v1.write_bytes(b"v1")
         v2.write_bytes(b"v2")
-        _add_file(session, library, dupe, v1)
-        _add_file(session, library, dupe, v2)
+        _add_file(session, library, dupe, v1, resolution="2160p")
+        _add_file(session, library, dupe, v2, resolution="1080p")
 
         # 待识别 → 跳过；缺失 → 不参与
         unknown = root / "zzqx.mkv"
@@ -115,17 +119,18 @@ async def test_movie_plan_targets_and_skips(db, tmp_path):
 
     assert plan.total == 5  # messy + tidy + v1 + v2 + unknown（missing 不计）
     assert plan.already_ok == 1
-    assert len(plan.renames) == 1
-    action = plan.renames[0]
-    assert action.target_path == str(root / "某电影 (2020)" / "某电影 (2020).mkv")
-    assert action.target_rel == "某电影 (2020)/某电影 (2020).mkv"
+    targets = {a.source_path: a.target_path for a in plan.renames}
+    assert targets[str(messy)] == str(root / "某电影 (2020)" / "某电影 (2020).mkv")
+    # 多版本：同一条目目录内加 " - 分辨率" 标签，播放器归组为同片多版本
+    assert targets[str(v1)] == str(root / "双版本 (2021)" / "双版本 (2021) - 2160p.mkv")
+    assert targets[str(v2)] == str(root / "双版本 (2021)" / "双版本 (2021) - 1080p.mkv")
     # 字幕随迁、异容器视频不算附属
+    action = next(a for a in plan.renames if a.source_path == str(messy))
     assert [s.target_path for s in action.sidecars] == [
         str(root / "某电影 (2020)" / "某电影 (2020).zh.srt")
     ]
     reasons = {s.file_path: s.reason for s in plan.skips}
     assert "认领" in reasons[str(unknown)]
-    assert "多版本" in reasons[str(v1)] and "多版本" in reasons[str(v2)]
 
 
 @pytest.mark.asyncio
@@ -214,6 +219,66 @@ async def test_organize_skips_occupied_target(db, tmp_path):
     assert plan.renames == []
     assert any("覆盖" in s.reason for s in plan.skips)
     assert (occupied / "某电影 (2020).mkv").read_bytes() == b"already-here"
+
+
+@pytest.mark.asyncio
+async def test_multi_version_fallback_labels_and_idempotent_rerun(db, tmp_path):
+    """探测信息全缺的多版本按大小 V1/V2 编号；整理后重算计划全部已规范（幂等）。"""
+    root = tmp_path / "movies"
+    async with db.session() as session:
+        library = await _make_library(session, kind=MediaKind.MOVIE, root=root)
+        dupe = await _make_item(
+            session, kind=MediaKind.MOVIE, tmdb_id=302, title="双版本", year=2021
+        )
+        big = root / "双版本.big.mkv"
+        small = root / "双版本.small.mkv"
+        big.write_bytes(b"bigger-content")
+        small.write_bytes(b"s")
+        _add_file(session, library, dupe, big)
+        _add_file(session, library, dupe, small)
+        await session.commit()
+        library_id = library.id
+
+    summary = await organize_library(library_id)
+
+    assert summary.errors == []
+    assert summary.renamed == 2
+    entry = root / "双版本 (2021)"
+    assert (entry / "双版本 (2021) - V1.mkv").read_bytes() == b"bigger-content"
+    assert (entry / "双版本 (2021) - V2.mkv").read_bytes() == b"s"
+
+    # 幂等：标签推导确定性，重算计划不再产生任何改名
+    async with db.session() as session:
+        library = await session.get(Library, library_id)
+        plan = await build_organize_plan(session, library)
+    assert plan.renames == []
+    assert plan.already_ok == 2
+
+
+@pytest.mark.asyncio
+async def test_extra_version_joins_canonical_file(db, tmp_path):
+    """规范名被同条目的在位文件占用：新文件加版本标签并入，而不是跳过。"""
+    root = tmp_path / "movies"
+    async with db.session() as session:
+        library = await _make_library(session, kind=MediaKind.MOVIE, root=root)
+        movie = await _make_item(
+            session, kind=MediaKind.MOVIE, tmdb_id=300, title="某电影", year=2020
+        )
+        entry = root / "某电影 (2020)"
+        entry.mkdir(parents=True)
+        canonical = entry / "某电影 (2020).mkv"
+        canonical.write_bytes(b"1080p-version")
+        _add_file(session, library, movie, canonical, resolution="1080p")
+        extra = root / "某电影.4k.mkv"
+        extra.write_bytes(b"4k-version")
+        _add_file(session, library, movie, extra, resolution="2160p")
+        await session.commit()
+
+        plan = await build_organize_plan(session, library)
+
+    # 无标签的规范文件保持不动（Emby/Plex 按相同基础名归组），新版本带标签并入
+    assert plan.already_ok == 1
+    assert [a.target_path for a in plan.renames] == [str(entry / "某电影 (2020) - 2160p.mkv")]
 
 
 @pytest.mark.asyncio
