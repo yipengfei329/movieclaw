@@ -374,6 +374,68 @@ async def test_probe_gate_applies_per_file(db, tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_wanted_identity_claim_via_info_hash(db, tmp_path, monkeypatch):
+    """匹配到订阅工单的种子：继承投递时锚定的精确身份，不走名称识别链。"""
+    from movieclaw_db.models import RuleSet, Subscription, WantedItem, WantedStatus
+    from movieclaw_downloader import TorrentBrief
+
+    root, watch = tmp_path / "movies", tmp_path / "watch"
+    watch.mkdir()
+    library_id = await _make_library(db, kind=MediaKind.MOVIE, root=root)
+    item = await _make_item(db, kind=MediaKind.MOVIE, title="某电影", year=2020)
+    monkeypatch.setattr(ingest_mod, "probe_media", lambda p: _FAKE_SPEC)
+
+    # 名称识别链打桩为必然失败：只有工单认领能给出身份
+    async def identify_none(session, kind, watch_root, main, spec):
+        return None
+
+    monkeypatch.setattr(ingest_mod, "_identify", identify_none)
+
+    async with db.session() as session:
+        rule_set = RuleSet(name="默认", spec={})
+        session.add(rule_set)
+        await session.commit()
+        await session.refresh(rule_set)
+        sub = Subscription(
+            media_item_id=item.id, kind="movie", rule_set_id=rule_set.id, library_id=library_id
+        )
+        session.add(sub)
+        await session.commit()
+        await session.refresh(sub)
+        session.add(
+            WantedItem(
+                subscription_id=sub.id,
+                media_item_id=item.id,
+                season_number=0,
+                episode_number=0,
+                status=WantedStatus.GRABBED,
+                info_hash="abc123",
+            )
+        )
+        await session.commit()
+
+    brief = TorrentBrief(
+        name="Cryptic.Release.Name",
+        content_name="Cryptic.Release.Name",
+        completed=True,
+        info_hash="abc123",
+    )
+
+    async def briefs():
+        return [brief]
+
+    monkeypatch.setattr(ingest_mod, "_downloader_briefs", briefs)
+
+    entry = watch / "Cryptic.Release.Name"
+    entry.mkdir()
+    (entry / "video.mkv").write_bytes(b"video")
+
+    library = await _get_library(db, library_id)
+    await ingest_mod._sweep_dir(library, str(watch), "hardlink")  # 下载器确认完成,单轮即处理
+    assert (root / "某电影 (2020)" / "某电影 (2020).mkv").read_bytes() == b"video"
+
+
+@pytest.mark.asyncio
 async def test_fallback_only_sweeps_unwatched_dirs(db, tmp_path, monkeypatch):
     """兜底巡检只扫监听覆盖不到的目录：被实时监听的目录绝不重复主动扫。"""
     root = tmp_path / "movies"

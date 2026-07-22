@@ -167,6 +167,7 @@ class TransmissionDownloader(BaseDownloader):
                 name=torrent.name,
                 content_name=torrent.name,
                 completed=float(torrent.percent_done) >= 1.0,
+                info_hash=str(torrent.hash_string).lower(),
             )
             for torrent in torrents
         ]

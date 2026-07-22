@@ -282,13 +282,20 @@ async def _downloader_briefs() -> list | None:
     return result
 
 
-def _torrent_verdict(entry_name: str, briefs: list | None) -> str | None:
-    """按名称把条目匹配到下载器种子："complete" / "downloading" / None（未匹配）。
+def _match_briefs(entry_name: str, briefs: list | None) -> list:
+    """按名称把条目匹配到下载器种子。
 
     条目名就是种子的落盘根目录/文件名，比对种子名与 content_name 两个口径
-    ——名称匹配免疫容器路径映射。同名多个种子从严：任一未完成即视为下载中。
+    ——名称匹配免疫容器路径映射。
     """
-    matches = [b for b in briefs or [] if entry_name in (b.name, b.content_name)]
+    return [b for b in briefs or [] if entry_name in (b.name, b.content_name)]
+
+
+def _torrent_verdict(matches: list) -> str | None:
+    """匹配结果 → "complete" / "downloading" / None（未匹配）。
+
+    同名多个种子从严：任一未完成即视为下载中。
+    """
     if not matches:
         return None
     return "complete" if all(b.completed for b in matches) else "downloading"
@@ -301,7 +308,8 @@ async def _process_entry(
     snap = await asyncio.to_thread(_snapshot, entry)
     # 权威信号优先：能匹配到下载器种子时以下载器状态为准；标记文件与权威
     # 信号矛盾（说完成却还有 .!qB 等）说明匹配可疑，从严按下载中处理
-    verdict = _torrent_verdict(entry.name, briefs)
+    matches = _match_briefs(entry.name, briefs)
+    verdict = _torrent_verdict(matches)
     if snap.has_marker or verdict == "downloading":
         _stability.pop(path_str, None)
         return
@@ -331,7 +339,10 @@ async def _process_entry(
             if now - previous[1] < QUIET_SECONDS:
                 return
 
-        await _ingest_entry(session, library, watch_root, entry, strategy, snap, record)
+        matched_hashes = [b.info_hash for b in matches if b.info_hash]
+        await _ingest_entry(
+            session, library, watch_root, entry, strategy, snap, record, matched_hashes
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +363,7 @@ async def _ingest_entry(
     strategy: str,
     snap: _EntrySnapshot,
     record: IngestEntry | None,
+    matched_hashes: list[str] | None = None,
 ) -> None:
     async def conclude(status: IngestStatus, message: str, imported: int = 0) -> None:
         await _save_record(
@@ -377,7 +389,11 @@ async def _ingest_entry(
         )
         return
 
-    item = await _identify(session, kind, watch_root, main, spec)
+    # 身份优先级：订阅工单认领（info_hash 命中在途投递 → 继承投递时锚定的
+    # 精确身份，零猜测）→ 名称解析识别链（第三方下载的兜底）
+    item = await _wanted_identity(session, matched_hashes or [])
+    if item is None:
+        item = await _identify(session, kind, watch_root, main, spec)
     if item is None:
         await conclude(
             IngestStatus.FAILED,
@@ -476,6 +492,24 @@ async def _ingest_entry(
     else:
         # 全部文件都已在库（此前处理过/多下载器重复下载）：结论记 imported
         await conclude(IngestStatus.IMPORTED, f"《{item.title}》的内容已全部在库，无需搬运")
+
+
+async def _wanted_identity(session, info_hashes: list[str]) -> MediaItem | None:
+    """按 info_hash 反查订阅工单，继承投递时锚定的精确身份；查不到返回 None。"""
+    if not info_hashes:
+        return None
+    from movieclaw_db.models import Subscription, WantedItem
+
+    result = await session.execute(
+        select(MediaItem)
+        .join(Subscription, MediaItem.id == Subscription.media_item_id)  # type: ignore[arg-type]
+        .join(WantedItem, WantedItem.subscription_id == Subscription.id)  # type: ignore[arg-type]
+        .where(WantedItem.info_hash.in_(info_hashes))  # type: ignore[union-attr]
+    )
+    item = result.scalars().first()
+    if item is not None:
+        logger.info("条目按 info_hash 认领了订阅身份：《%s》", item.title)
+    return item
 
 
 async def _identify(

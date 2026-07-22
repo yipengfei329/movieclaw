@@ -179,6 +179,7 @@ class QBittorrentDownloader(BaseDownloader):
                     name=torrent.name,
                     content_name=content_name or torrent.name,
                     completed=float(torrent.progress) >= 1.0,
+                    info_hash=str(torrent.hash).lower(),
                 )
             )
         return briefs
