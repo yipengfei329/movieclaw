@@ -34,6 +34,7 @@ from movieclaw_downloader.models import (
     DownloaderType,
     DownloadRequest,
     SubmitResult,
+    TorrentBrief,
     TorrentFile,
     TorrentStatus,
 )
@@ -152,6 +153,23 @@ class TransmissionDownloader(BaseDownloader):
                 for file in torrent.get_files()
             ],
         )
+
+    async def list_torrents(self) -> list[TorrentBrief]:
+        return await asyncio.to_thread(self._list_torrents_sync)
+
+    def _list_torrents_sync(self) -> list[TorrentBrief]:
+        client = self._client()
+        with _translate_errors(self.config.url):
+            torrents = client.get_torrents()
+        # Transmission 的任务名即落盘根目录/文件名，无独立的 content_path
+        return [
+            TorrentBrief(
+                name=torrent.name,
+                content_name=torrent.name,
+                completed=float(torrent.percent_done) >= 1.0,
+            )
+            for torrent in torrents
+        ]
 
     async def test_connection(self) -> DownloaderInfo:
         return await asyncio.to_thread(self._test_connection_sync)

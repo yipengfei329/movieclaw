@@ -121,13 +121,20 @@ def build_lifespan(settings: Settings):
         from movieclaw_api.services.library_watch import init_library_watcher
 
         await init_library_watcher()
+        # 下载监听导入：监听目录文件事件 → 去抖 → 完成检测 → 硬链/复制入库；
+        # 同样在 watchdog 缺失时降级为仅兜底巡检
+        from movieclaw_api.services.library_ingest import init_ingest_watcher
+
+        await init_ingest_watcher()
         logger.info("应用启动完成，数据库就绪")
         try:
             yield
         finally:
             # 先停媒体库监听（观察者线程持有事件循环引用，须在循环关闭前退出）
+            from movieclaw_api.services.library_ingest import close_ingest_watcher
             from movieclaw_api.services.library_watch import close_library_watcher
 
+            await close_ingest_watcher()
             await close_library_watcher()
             # 先停止 Agent，避免它在下游 HTTP 客户端和数据库开始释放后继续工作。
             await close_agent_run_registry()

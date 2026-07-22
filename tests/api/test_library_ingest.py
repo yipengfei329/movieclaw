@@ -1,10 +1,10 @@
 """下载监听导入的测试。
 
-覆盖：完成检测（进行中标记阻断并重置计时、指纹静默窗口、探测门禁）、
-硬链接/复制两种搬运策略、电影/剧集的规范落位、台账幂等（同指纹不重复
-处理、指纹变化自动重试、季包增量补集）、识别失败的失败记录、配置校验
-（监听目录与根路径重叠拒绝）。识别与季集解析依赖 NER 模型与 TMDB，
-此处打桩——识别链本体由扫描器测试覆盖。
+覆盖：完成检测（下载器权威信号优先、进行中标记阻断并重置计时、指纹
+静默窗口、逐文件探测门禁）、硬链接/复制两种搬运策略、电影/剧集的规范
+落位、台账幂等（同指纹不重复处理、指纹变化自动重试、季包增量补集）、
+识别失败的失败记录、配置校验（监听目录与根路径重叠拒绝）。识别与季集
+解析依赖 NER 模型与 TMDB，此处打桩——识别链本体由扫描器测试覆盖。
 """
 
 from __future__ import annotations
@@ -42,9 +42,11 @@ async def db(tmp_path, monkeypatch):
     init_db(get_settings().database_url, echo=False)
     await run_migrations()
     # 每个测试独立的静默观察表 + 立即落定的静默窗口（两次巡检即可导入：
-    # 第一轮记录指纹，第二轮确认稳定）
+    # 第一轮记录指纹，第二轮确认稳定）；下载器概览缓存清空（默认无下载器
+    # → 权威信号缺席 → 走启发式路径）
     monkeypatch.setattr(ingest_mod, "_stability", {})
     monkeypatch.setattr(ingest_mod, "QUIET_SECONDS", 0)
+    monkeypatch.setattr(ingest_mod, "_briefs_cache", (float("-inf"), None))
     yield get_database()
     await dispose_db()
     get_settings.cache_clear()
@@ -290,6 +292,75 @@ async def test_tv_import_and_incremental_episodes(db, tmp_path, monkeypatch):
         record = (await session.execute(select(IngestEntry))).scalar_one()
     assert len(files) == 3
     assert record.imported_count == 3
+
+
+@pytest.mark.asyncio
+async def test_downloader_signal_is_authoritative(db, tmp_path, monkeypatch):
+    """名称匹配到下载器种子：未完成时任凭静默也不导入；完成则单轮立即导入。"""
+    from movieclaw_downloader import TorrentBrief
+
+    root, watch = tmp_path / "movies", tmp_path / "watch"
+    watch.mkdir()
+    library_id = await _make_library(db, kind=MediaKind.MOVIE, root=root)
+    item = await _make_item(db, kind=MediaKind.MOVIE, title="某电影", year=2020)
+    _stub_identify(monkeypatch, item)
+    monkeypatch.setattr(ingest_mod, "probe_media", lambda p: _FAKE_SPEC)
+
+    brief = TorrentBrief(name="Some.Movie.2020", content_name="Some.Movie.2020", completed=False)
+
+    async def briefs():
+        return [brief]
+
+    monkeypatch.setattr(ingest_mod, "_downloader_briefs", briefs)
+
+    entry = watch / "Some.Movie.2020"
+    entry.mkdir()
+    (entry / "movie.mkv").write_bytes(b"video")
+
+    # 下载器说没完成：静默窗口为 0 也不能导入（暂停种子的根治场景）
+    await _sweep_twice(db, library_id, watch)
+    await _sweep_twice(db, library_id, watch)
+    assert not (root / "某电影 (2020)").exists()
+
+    # 下载器确认完成：无需静默等待，单轮巡检立即导入
+    brief.completed = True
+    library = await _get_library(db, library_id)
+    await ingest_mod._sweep_dir(library, str(watch), "hardlink")
+    assert (root / "某电影 (2020)" / "某电影 (2020).mkv").read_bytes() == b"video"
+
+
+@pytest.mark.asyncio
+async def test_probe_gate_applies_per_file(db, tmp_path, monkeypatch):
+    """探测门禁逐文件生效：季包里残缺的单集被拦下，完整的集照常入库。"""
+    root, watch = tmp_path / "tv", tmp_path / "watch"
+    watch.mkdir()
+    library_id = await _make_library(db, kind=MediaKind.TV, root=root)
+    item = await _make_item(db, kind=MediaKind.TV, title="测试剧集", year=2024)
+    _stub_identify(monkeypatch, item)
+    monkeypatch.setattr(ingest_mod, "_ffprobe_available", lambda: True)
+    # ep2 残缺：探测失败；其余正常
+    monkeypatch.setattr(
+        ingest_mod, "probe_media", lambda p: None if "ep2" in str(p) else _FAKE_SPEC
+    )
+    monkeypatch.setattr(
+        ingest_mod, "_unit", lambda file, entry: (1, int(file.stem.removeprefix("ep")))
+    )
+
+    entry = watch / "测试剧集 S01"
+    entry.mkdir()
+    (entry / "ep1.mkv").write_bytes(b"full-episode")  # 最大文件 = 主文件，探测通过
+    (entry / "ep2.mkv").write_bytes(b"partial")
+
+    await _sweep_twice(db, library_id, watch)
+
+    season_dir = root / "测试剧集 (2024)" / "Season 01"
+    assert (season_dir / "测试剧集 (2024) - S01E01.mkv").exists()
+    assert not (season_dir / "测试剧集 (2024) - S01E02.mkv").exists()
+    async with db.session() as session:
+        record = (await session.execute(select(IngestEntry))).scalar_one()
+    assert record.status == IngestStatus.IMPORTED
+    assert record.imported_count == 1
+    assert "探测失败" in (record.message or "")
 
 
 @pytest.mark.asyncio

@@ -136,12 +136,16 @@ class LibraryConfigService:
 
     @staticmethod
     async def _refresh_watcher() -> None:
-        """库/根路径变更后重建实时监听（监听器未启动时为 no-op）。"""
+        """库/根路径/监听目录变更后重建实时监听（监听器未启动时为 no-op）。"""
+        from movieclaw_api.services.library_ingest import get_ingest_watcher
         from movieclaw_api.services.library_watch import get_library_watcher
 
         watcher = get_library_watcher()
         if watcher is not None:
             await watcher.refresh_watches()
+        ingest_watcher = get_ingest_watcher()
+        if ingest_watcher is not None:
+            await ingest_watcher.refresh_watches()
 
     async def create(
         self,

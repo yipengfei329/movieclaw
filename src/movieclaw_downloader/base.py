@@ -7,6 +7,7 @@ from movieclaw_downloader.models import (
     DownloaderInfo,
     DownloadRequest,
     SubmitResult,
+    TorrentBrief,
     TorrentStatus,
 )
 from movieclaw_downloader.torrent import compute_info_hash, parse_magnet_info_hash
@@ -36,6 +37,14 @@ class BaseDownloader(abc.ABC):
         """按 infohash 查询下载任务的进度与文件清单；不存在返回 None。
 
         入库管线据此判断"下载器确认完成"（completed）并拿到文件的落盘位置。
+        """
+
+    @abc.abstractmethod
+    async def list_torrents(self) -> list[TorrentBrief]:
+        """列出全部下载任务的轻量概览（名称/落盘根名/是否完成）。
+
+        下载监听导入据此按**名称**判定条目是否下载完成——名称匹配免疫
+        容器路径映射，比 save_path 比对可靠（见 TorrentBrief 注释）。
         """
 
     @abc.abstractmethod

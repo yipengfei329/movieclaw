@@ -7,20 +7,33 @@
   qB 里加的种、网盘/浏览器下载等），完成后自动按规范命名搬进库。
   监听目录独立于库根路径配置，每个目录可选搬运策略（硬链接/复制）。
 
-完成检测（本功能的核心难点——下载开始时目录结构就已建立，单一信号
-都不可靠，用四层组合信号）：
+完成检测（本功能的核心难点——下载开始时目录结构就已建立）：
+0. **下载器权威信号优先**：条目名能匹配到已配置下载器中的种子
+   （比对种子名与落盘根名——**按名称匹配免疫容器路径映射**，save_path
+   两侧视角不同不可靠）时，以下载器报告的完成状态为准：未完成就等，
+   完成即处理、无需静默窗口——这是暂停种子误判的根治手段；
+   匹配不到（网盘/浏览器等非种子来源）或下载器不可达时退回启发式：
 1. **进行中标记排除**：条目树内存在下载器的未完成标记文件
    （qBittorrent ``.!qB`` / aria2 ``.aria2`` / 浏览器 ``.crdownload`` 等）
-   即视为下载中，并重置静默计时；
+   即视为下载中，并重置静默计时（标记与权威信号矛盾时从严，按下载中处理）；
 2. **静默窗口**：条目全树指纹（总大小:文件数:最大 mtime）连续稳定
    ``QUIET_SECONDS`` 才算落定。**不能只看大小**——BT 客户端普遍预分配
    全尺寸文件，大小从一开始就不变，mtime 才是写入活动的真实信号；
-3. **ffprobe 终检**：入库前主视频必须探测成功，挡住"暂停的种子恰好
-   静默够久"的残缺文件（moov 在尾部的 mp4 未下完必然探测失败）；
+3. **ffprobe 终检**：入库前视频文件逐个探测，失败的不入库，挡住"暂停的
+   种子恰好静默够久"的残缺文件（moov 在尾部的 mp4 未下完必然探测失败）；
    ffprobe 未安装时此门禁自动放行（与扫描器的降级行为一致）；
 4. **指纹变化自动重试**：结论落 ``ingest_entry`` 台账，指纹变化（下载
    还在继续/季包补了新集）自动重新处理，失败条目另有小时级退避——
    这同时给了"边下边补集"的增量导入能力。
+
+触发机制（事件驱动，不做常驻轮询——监听目录里的保种源会永远留着，
+高频全量 stat 会让 NAS 磁盘永远无法休眠）：
+- 正常路径：``IngestWatcher`` 对监听目录挂 watchdog，有事件才去抖巡检
+  对应目录；下载写入持续产生事件，事件停止本身就是静默的开端；
+- 静默到点自检：事件停了之后没人会再叫醒我们，每轮巡检后若仍有条目在
+  等静默窗口，按最近到期时间挂一次性自检，全部落定即归零；
+- 兜底：每小时一次低频全量巡检 + 启动补扫，覆盖网络挂载不产生 fs 事件
+  与停机期间错过事件的场景（与库根监听"事件 + 对账兜底"同一套模式）。
 
 幂等与安全：
 - 源文件**永不改动**：硬链保种零占用（需与主根同盘），复制适合跨盘；
@@ -74,12 +87,15 @@ from movieclaw_scheduler.registry import register_task
 
 logger = logging.getLogger("movieclaw_api.library_ingest")
 
-# 巡检节奏与静默窗口：2 分钟扫一轮（纯 stat 遍历、很便宜），指纹连续稳定
-# 5 分钟才认为下载落定——写入中的文件 mtime 持续变化，够不成静默
-INGEST_TICK_SECONDS = 120
+# 兜底巡检节奏：正常路径是 watchdog 事件驱动，这里的低频全量巡检只兜底
+# 网络挂载不产生 fs 事件、进程停机期间错过事件两种场景
+FALLBACK_SWEEP_SECONDS = 3600
+# 静默窗口：指纹连续稳定 5 分钟才认为下载落定（写入中 mtime 持续变化）
 QUIET_SECONDS = 300
 # 失败条目的重试退避：指纹没变化时每小时才重试一次（避免反复打 TMDB）
 FAILED_RETRY_SECONDS = 3600
+# 下载器种子概览的缓存：一轮事件风暴中的多个目录巡检共享一次 API 调用
+_BRIEFS_TTL_SECONDS = 15.0
 
 # 下载器/浏览器的"未完成"标记（文件名小写后缀匹配）：
 # qBittorrent .!qb、aria2 控制文件 .aria2、Chrome .crdownload、
@@ -103,7 +119,10 @@ _IGNORE_MARKERS = ("sample",)
 # 进程内的静默观察：条目路径 -> (指纹, 首次见到该指纹的单调时钟)。
 # 重启丢失只是重新等一个静默窗口，无需持久化
 _stability: dict[str, tuple[str, float]] = {}
-_tick_lock = asyncio.Lock()
+# 巡检串行锁：事件驱动与兜底巡检可能同时到达同一目录，串行化防同条目双处理
+_sweep_lock = asyncio.Lock()
+# 下载器种子概览缓存：(取样时刻, 概览列表或 None=不可用)
+_briefs_cache: tuple[float, list | None] = (float("-inf"), None)
 
 
 class IngestError(Exception):
@@ -177,28 +196,27 @@ def _snapshot(entry: Path) -> _EntrySnapshot:
 
 @register_task(
     "library_ingest",
-    title="下载监听导入",
+    title="下载监听导入（兜底巡检）",
     trigger_type=TriggerType.INTERVAL,
-    interval_seconds=INGEST_TICK_SECONDS,
+    interval_seconds=FALLBACK_SWEEP_SECONDS,
     description=(
-        "巡检各媒体库配置的下载监听目录：下载完成（指纹静默 + 无进行中标记 + "
-        "探测通过）的内容识别后按目录策略硬链接/复制进库主根，规范命名入账。"
+        "低频兜底巡检各媒体库的下载监听目录（正常路径是目录事件实时触发）：下载"
+        "完成（下载器确认或指纹静默 + 探测通过）的内容按目录策略硬链接/复制进库主根。"
     ),
 )
 async def ingest_tick() -> None:
-    async with _tick_lock:
-        db = get_database()
-        async with db.session() as session:
-            libraries = list((await session.execute(select(Library))).scalars().all())
-        for library in libraries:
-            for cfg in library.ingest_dirs:
-                path, strategy = cfg.get("path"), cfg.get("strategy")
-                if not path or strategy not in ("hardlink", "copy"):
-                    continue  # 历史脏配置：写入侧已校验，这里静默容错
-                try:
-                    await _sweep_dir(library, path, strategy)
-                except Exception:  # noqa: BLE001 -- 单目录失败不拖垮整轮
-                    logger.exception("媒体库「%s」的监听目录巡检失败：%s", library.name, path)
+    db = get_database()
+    async with db.session() as session:
+        libraries = list((await session.execute(select(Library))).scalars().all())
+    for library in libraries:
+        for cfg in library.ingest_dirs:
+            path, strategy = cfg.get("path"), cfg.get("strategy")
+            if not path or strategy not in ("hardlink", "copy"):
+                continue  # 历史脏配置：写入侧已校验，这里静默容错
+            try:
+                await _sweep_dir(library, path, strategy)
+            except Exception:  # noqa: BLE001 -- 单目录失败不拖垮整轮
+                logger.exception("媒体库「%s」的监听目录巡检失败：%s", library.name, path)
 
 
 async def _sweep_dir(library: Library, watch_root: str, strategy: str) -> None:
@@ -206,28 +224,80 @@ async def _sweep_dir(library: Library, watch_root: str, strategy: str) -> None:
     root = Path(watch_root)
     if not root.is_dir():
         return  # 目录未就绪（挂载中/配置超前）：不告警刷屏，下轮再看
-    try:
-        entries = sorted(e for e in root.iterdir() if not e.name.startswith("."))
-    except OSError as exc:
-        logger.warning("读取监听目录失败（%s）：%s", watch_root, exc)
-        return
-    seen = {str(e) for e in entries}
-    for entry in entries:
+    async with _sweep_lock:
+        briefs = await _downloader_briefs()
         try:
-            await _process_entry(library, root, entry, strategy)
-        except Exception:  # noqa: BLE001 -- 单条目失败不断整轮
-            logger.exception("处理监听条目失败：%s", entry)
-    # 条目从监听目录消失（用户删源）后清掉它的静默观察，防字典无界增长
-    prefix = str(root).rstrip("/") + "/"
-    for key in [k for k in _stability if k.startswith(prefix) and k not in seen]:
-        _stability.pop(key, None)
+            entries = sorted(e for e in root.iterdir() if not e.name.startswith("."))
+        except OSError as exc:
+            logger.warning("读取监听目录失败（%s）：%s", watch_root, exc)
+            return
+        seen = {str(e) for e in entries}
+        for entry in entries:
+            try:
+                await _process_entry(library, root, entry, strategy, briefs)
+            except Exception:  # noqa: BLE001 -- 单条目失败不断整轮
+                logger.exception("处理监听条目失败：%s", entry)
+        # 条目从监听目录消失（用户删源）后清掉它的静默观察，防字典无界增长
+        prefix = str(root).rstrip("/") + "/"
+        for key in [k for k in _stability if k.startswith(prefix) and k not in seen]:
+            _stability.pop(key, None)
 
 
-async def _process_entry(library: Library, watch_root: Path, entry: Path, strategy: str) -> None:
+async def _downloader_briefs() -> list | None:
+    """全部可用下载器的种子概览（带短缓存）；无下载器/全部不可达返回 None。
+
+    None 表示"权威信号缺席"——调用方退回启发式检测，而不是把所有条目
+    误判成"未在下载"。
+    """
+    global _briefs_cache
+    now = time.monotonic()
+    cached_at, cached = _briefs_cache
+    if now - cached_at < _BRIEFS_TTL_SECONDS:
+        return cached
+    # 局部导入：复用订阅管线的"可用下载器"口径，避免模块加载期的重依赖
+    from movieclaw_api.services.download_progress import _usable_downloaders
+    from movieclaw_downloader import create_downloader
+
+    db = get_database()
+    async with db.session() as session:
+        downloaders = await _usable_downloaders(session)
+    briefs: list = []
+    any_ok = False
+    for row, config in downloaders:
+        adapter = create_downloader(config)
+        try:
+            briefs.extend(await adapter.list_torrents())
+            any_ok = True
+        except Exception as exc:  # noqa: BLE001 -- 单台不可达降级继续
+            logger.warning("列出下载器「%s」的种子失败：%s", row.name, exc)
+        finally:
+            await adapter.close()
+    result = briefs if any_ok else None
+    _briefs_cache = (now, result)
+    return result
+
+
+def _torrent_verdict(entry_name: str, briefs: list | None) -> str | None:
+    """按名称把条目匹配到下载器种子："complete" / "downloading" / None（未匹配）。
+
+    条目名就是种子的落盘根目录/文件名，比对种子名与 content_name 两个口径
+    ——名称匹配免疫容器路径映射。同名多个种子从严：任一未完成即视为下载中。
+    """
+    matches = [b for b in briefs or [] if entry_name in (b.name, b.content_name)]
+    if not matches:
+        return None
+    return "complete" if all(b.completed for b in matches) else "downloading"
+
+
+async def _process_entry(
+    library: Library, watch_root: Path, entry: Path, strategy: str, briefs: list | None
+) -> None:
     path_str = str(entry)
     snap = await asyncio.to_thread(_snapshot, entry)
-    if snap.has_marker:
-        # 明确在下载中：重置静默计时，标记消失后重新起算
+    # 权威信号优先：能匹配到下载器种子时以下载器状态为准；标记文件与权威
+    # 信号矛盾（说完成却还有 .!qB 等）说明匹配可疑，从严按下载中处理
+    verdict = _torrent_verdict(entry.name, briefs)
+    if snap.has_marker or verdict == "downloading":
         _stability.pop(path_str, None)
         return
 
@@ -242,14 +312,19 @@ async def _process_entry(library: Library, watch_root: Path, entry: Path, strate
             if (utcnow() - record.attempted_at).total_seconds() < FAILED_RETRY_SECONDS:
                 return  # 失败退避中
 
-        # 静默窗口：同一指纹连续稳定 QUIET_SECONDS 才认为下载落定
-        now = time.monotonic()
-        previous = _stability.get(path_str)
-        if previous is None or previous[0] != snap.fingerprint:
-            _stability[path_str] = (snap.fingerprint, now)
-            return
-        if now - previous[1] < QUIET_SECONDS:
-            return
+        if verdict == "complete":
+            # 下载器确认完成：跳过静默窗口，立即处理
+            _stability.pop(path_str, None)
+        else:
+            # 启发式兜底（非种子来源/下载器不可用）：
+            # 同一指纹连续稳定 QUIET_SECONDS 才认为下载落定
+            now = time.monotonic()
+            previous = _stability.get(path_str)
+            if previous is None or previous[0] != snap.fingerprint:
+                _stability[path_str] = (snap.fingerprint, now)
+                return
+            if now - previous[1] < QUIET_SECONDS:
+                return
 
         await _ingest_entry(session, library, watch_root, entry, strategy, snap, record)
 
@@ -344,6 +419,11 @@ async def _ingest_entry(
                 / f"{base} - S{season:02d}E{episode:02d}{ext}"
             )
         file_spec = spec if file == main else await asyncio.to_thread(probe_media, file)
+        # 门禁逐文件生效：暂停的季包可能前几集完整、后几集残缺，主文件
+        # 探测通过不代表每个文件都完整
+        if file_spec is None and _ffprobe_available():
+            notes.append(f"「{file.name}」探测失败（可能不完整），未入库；文件变化后自动重试")
+            continue
         label = (file_spec.resolution if file_spec else None) or release_attrs.media_source or "V2"
         try:
             final = await asyncio.to_thread(_transfer, file, target, strategy, label)
@@ -532,3 +612,185 @@ async def _save_record(
         logger.warning("监听导入未完成（%s）：%s", entry_path, message)
     else:
         logger.info("监听导入（%s）：%s", entry_path, message)
+
+
+# ---------------------------------------------------------------------------
+# 事件驱动：监听目录的 watchdog 观察者（进程级单例，模式同 library_watch）
+# ---------------------------------------------------------------------------
+
+# 事件去抖：首个事件后等安静 3 秒再巡检；持续有事件时最长 30 秒必巡检一次
+_EVENT_QUIET_SECONDS = 3.0
+_EVENT_MAX_WAIT_SECONDS = 30.0
+
+
+class IngestWatcher:
+    """下载监听目录的文件事件观察者。
+
+    事件驱动是本功能的既定形态（不做常驻轮询）：下载写入持续产生 fs
+    事件，事件停止即静默的开端；没有下载活动时零开销，NAS 磁盘可以休眠。
+    静默窗口的"到点检查"没有事件会叫醒——每轮巡检后若仍有条目在等静默，
+    按最近到期时间挂一个一次性自检任务，条目全部落定后自然归零。
+    """
+
+    def __init__(self) -> None:
+        self._observer = None
+        self._queue: asyncio.Queue[tuple[int, str]] = asyncio.Queue()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._consumer: asyncio.Task | None = None
+        self._catchup: asyncio.Task | None = None
+        self._available = True
+        # 静默到点自检任务：每个监听目录至多挂一个
+        self._rechecks: dict[tuple[int, str], asyncio.Task] = {}
+
+    # -- 生命周期 ----------------------------------------------------------
+
+    async def start(self) -> None:
+        self._loop = asyncio.get_running_loop()
+        self._consumer = asyncio.create_task(self._consume())
+        await self.refresh_watches()
+        # 启动补扫：停机期间完成的下载不会再产生事件，开机全量扫一次补上
+        self._catchup = asyncio.create_task(ingest_tick())
+
+    async def stop(self) -> None:
+        for task in (self._consumer, self._catchup, *self._rechecks.values()):
+            if task is not None:
+                task.cancel()
+        self._consumer = None
+        self._catchup = None
+        self._rechecks.clear()
+        self._stop_observer()
+
+    def _stop_observer(self) -> None:
+        if self._observer is not None:
+            self._observer.stop()
+            self._observer.join(timeout=5)
+            self._observer = None
+
+    async def refresh_watches(self) -> None:
+        """按当前库配置重建监听（库增删改监听目录后调用）。"""
+        if not self._available:
+            return
+        try:
+            from watchdog.events import FileSystemEventHandler
+            from watchdog.observers import Observer
+        except ImportError:
+            self._available = False
+            logger.warning("未安装 watchdog，下载监听不实时——完成的下载靠每小时兜底巡检发现")
+            return
+
+        db = get_database()
+        async with db.session() as session:
+            libraries = list((await session.execute(select(Library))).scalars().all())
+
+        watcher = self
+
+        class _Handler(FileSystemEventHandler):
+            """事件回调（观察者线程）：只投递监听目录标识，不做任何业务。"""
+
+            def __init__(self, library_id: int, watch_root: str) -> None:
+                self._key = (library_id, watch_root)
+
+            def on_any_event(self, event) -> None:  # noqa: ANN001
+                watcher._enqueue_threadsafe(self._key)
+
+        self._stop_observer()
+        observer = Observer()
+        watched = 0
+        for library in libraries:
+            assert library.id is not None
+            for cfg in library.ingest_dirs:
+                path, strategy = cfg.get("path"), cfg.get("strategy")
+                if not path or strategy not in ("hardlink", "copy"):
+                    continue
+                if not Path(path).is_dir():
+                    continue  # 目录未就绪：兜底巡检持续兜着，不告警刷屏
+                try:
+                    observer.schedule(_Handler(library.id, path), path, recursive=True)
+                    watched += 1
+                except OSError as exc:
+                    logger.warning("监听下载目录失败（%s）：%s", path, exc)
+        if watched:
+            observer.daemon = True
+            observer.start()
+            self._observer = observer
+            logger.info("下载监听已启动：监听 %d 个目录", watched)
+
+    # -- 事件通道 ----------------------------------------------------------
+
+    def _enqueue_threadsafe(self, key: tuple[int, str]) -> None:
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        loop.call_soon_threadsafe(self._queue.put_nowait, key)
+
+    async def _consume(self) -> None:
+        """去抖消费：首事件后等安静窗口，汇总本批涉及的监听目录逐个巡检。"""
+        while True:
+            first = await self._queue.get()
+            pending = {first}
+            deadline = asyncio.get_running_loop().time() + _EVENT_MAX_WAIT_SECONDS
+            while True:
+                remaining = deadline - asyncio.get_running_loop().time()
+                timeout = min(_EVENT_QUIET_SECONDS, max(remaining, 0))
+                try:
+                    pending.add(await asyncio.wait_for(self._queue.get(), timeout))
+                except TimeoutError:
+                    break  # 安静窗口达成
+                if asyncio.get_running_loop().time() >= deadline:
+                    break  # 兜底：持续有事件也要巡检
+            for library_id, watch_root in sorted(pending):
+                try:
+                    await self._sweep(library_id, watch_root)
+                except Exception:  # noqa: BLE001 -- 监听消费绝不崩
+                    logger.exception("事件触发的监听目录巡检失败：%s", watch_root)
+
+    async def _sweep(self, library_id: int, watch_root: str) -> None:
+        db = get_database()
+        async with db.session() as session:
+            library = await session.get(Library, library_id)
+        if library is None:
+            return
+        cfg = next((c for c in library.ingest_dirs if c.get("path") == watch_root), None)
+        if cfg is None or cfg.get("strategy") not in ("hardlink", "copy"):
+            return  # 目录已从配置移除（refresh_watches 稍后会拆掉监听）
+        await _sweep_dir(library, watch_root, cfg["strategy"])
+        self._arm_recheck(library_id, watch_root)
+
+    def _arm_recheck(self, library_id: int, watch_root: str) -> None:
+        """仍有条目在等静默窗口时，按最近到期时间挂一次性自检。"""
+        prefix = watch_root.rstrip("/") + "/"
+        pending = [since for path, (_fp, since) in _stability.items() if path.startswith(prefix)]
+        if not pending:
+            return
+        key = (library_id, watch_root)
+        existing = self._rechecks.get(key)
+        if existing is not None and not existing.done():
+            return
+        delay = min(pending) + QUIET_SECONDS - time.monotonic() + 1.0
+        delay = max(5.0, min(delay, QUIET_SECONDS + 5.0))
+        self._rechecks[key] = asyncio.create_task(self._recheck_later(key, delay))
+
+    async def _recheck_later(self, key: tuple[int, str], delay: float) -> None:
+        await asyncio.sleep(delay)
+        self._queue.put_nowait(key)
+
+
+_watcher: IngestWatcher | None = None
+
+
+def get_ingest_watcher() -> IngestWatcher | None:
+    return _watcher
+
+
+async def init_ingest_watcher() -> None:
+    """启动进程级监听单例（lifespan 调用）。"""
+    global _watcher
+    _watcher = IngestWatcher()
+    await _watcher.start()
+
+
+async def close_ingest_watcher() -> None:
+    global _watcher
+    if _watcher is not None:
+        await _watcher.stop()
+        _watcher = None
