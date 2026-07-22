@@ -48,6 +48,12 @@ export interface MediaLibrary {
   scan_progress: ScanProgress | null;
   /** 最近一次扫描结论（扫描常毫秒级完成，靠它给"点了有反应"的反馈） */
   last_scan: LastScan | null;
+  /** 是否正在整理文件名（批量规范化改名） */
+  organizing: boolean;
+  /** 整理实时进度（没在整理为 null），与扫描进度同构 */
+  organize_progress: ScanProgress | null;
+  /** 最近一次整理结论（整理对话框的完成页数据源） */
+  last_organize: LastOrganize | null;
   created_at: string;
   updated_at: string;
 }
@@ -66,6 +72,61 @@ export interface LastScan {
   unidentified: number;
   marked_missing: number;
   errors: string[];
+}
+
+/** 最近一次整理的结论。 */
+export interface LastOrganize {
+  finished_at: string;
+  /** 改名归位的主文件数 */
+  renamed: number;
+  /** 跟随改名的附属文件数（字幕等） */
+  sidecars_renamed: number;
+  /** 本就符合规范、无需动作的文件数 */
+  already_ok: number;
+  /** 计划阶段跳过的文件数 */
+  skipped: number;
+  /** 搬空后清理掉的目录数 */
+  removed_dirs: number;
+  errors: string[];
+}
+
+/** 整理预览里跟随主文件改名的附属文件（字幕等）。 */
+export interface OrganizeSidecar {
+  source_path: string;
+  target_path: string;
+}
+
+/** 整理预览里的一条改名计划：旧路径 → 规范路径。 */
+export interface OrganizeRename {
+  file_id: number;
+  /** 所属条目——按条目分组展示 */
+  media_item_id: number;
+  title: string;
+  year: number | null;
+  source_path: string;
+  target_path: string;
+  /** 相对所在库根的旧路径（展示用） */
+  source_rel: string;
+  /** 相对所在库根的规范路径（展示用） */
+  target_rel: string;
+  size_bytes: number;
+  sidecars: OrganizeSidecar[];
+}
+
+/** 整理预览里的一条跳过说明。 */
+export interface OrganizeSkip {
+  file_path: string;
+  reason: string;
+}
+
+/** 整理预览：完整的「将要发生什么」清单，用户确认后才执行。 */
+export interface OrganizePreview {
+  /** 台账在位文件总数（= 改名 + 已规范 + 跳过） */
+  total: number;
+  /** 已符合规范命名的文件数 */
+  already_ok: number;
+  renames: OrganizeRename[];
+  skips: OrganizeSkip[];
 }
 
 /** 库内一个媒体条目的库存聚合（单库海报墙的一格）。 */
@@ -177,6 +238,29 @@ export function listLibraryItems(id: number, init?: RequestInit): Promise<Librar
 export function startLibraryScan(id: number): Promise<{ started: boolean; message: string }> {
   return unwrap(
     request<ApiEnvelope<{ started: boolean; message: string }>>(`/libraries/${id}/scan`, {
+      method: "POST",
+    }),
+  );
+}
+
+/** 获取单个媒体库详情（整理对话框轮询进度用）。 */
+export function getLibrary(id: number): Promise<MediaLibrary> {
+  return unwrap(request<ApiEnvelope<MediaLibrary>>(`/libraries/${id}`));
+}
+
+/** 预览整理计划：每个文件改成什么名、哪些跳过及原因（只读，不动磁盘）。 */
+export function previewLibraryOrganize(id: number): Promise<OrganizePreview> {
+  return unwrap(
+    request<ApiEnvelope<OrganizePreview>>(`/libraries/${id}/organize/preview`, {
+      method: "POST",
+    }),
+  );
+}
+
+/** 开始整理：按规范命名批量改名归位（后台执行，与扫描互斥）。 */
+export function startLibraryOrganize(id: number): Promise<{ started: boolean; message: string }> {
+  return unwrap(
+    request<ApiEnvelope<{ started: boolean; message: string }>>(`/libraries/${id}/organize`, {
       method: "POST",
     }),
   );

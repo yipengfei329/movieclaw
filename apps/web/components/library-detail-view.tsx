@@ -13,6 +13,7 @@ import {
   effectiveLibraryId,
   libraryCardAction,
 } from "@/components/library-view";
+import { LibraryOrganizeDialog } from "@/components/library-organize-dialog";
 import { PosterCardVisual, type PosterVisualItem } from "@/components/poster-card";
 import {
   type LibraryItem,
@@ -56,6 +57,8 @@ export function LibraryDetailView({ libraryId }: { libraryId: number }) {
   const [failed, setFailed] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [editing, setEditing] = useState<MediaLibrary | null>(null);
+  // 整理文件名对话框的目标库；null = 关闭
+  const [organizeTarget, setOrganizeTarget] = useState<MediaLibrary | null>(null);
   // 工单抽屉：从哪个胶囊点进来就落在哪个 tab；null = 关闭
   const [issueTab, setIssueTab] = useState<"missing" | "unidentified" | null>(null);
 
@@ -84,12 +87,13 @@ export function LibraryDetailView({ libraryId }: { libraryId: number }) {
 
   const library = libraries?.find((l) => l.id === libraryId) ?? null;
 
-  // 扫描期间轮询，结束自动展示新库存
+  // 扫描/整理期间轮询，结束自动展示最新库存与文件名
+  const busy = Boolean(library?.scanning || library?.organizing);
   useEffect(() => {
-    if (!library?.scanning) return;
+    if (!busy) return;
     const timer = setInterval(reload, 3000);
     return () => clearInterval(timer);
-  }, [library?.scanning, reload]);
+  }, [busy, reload]);
 
   // 追踪中：目标是本库、且尚未在库存中出现的订阅
   const pending = useMemo(() => {
@@ -217,7 +221,7 @@ export function LibraryDetailView({ libraryId }: { libraryId: number }) {
           <div className="flex shrink-0 items-center gap-2.5">
             <button
               type="button"
-              disabled={library.scanning}
+              disabled={busy}
               onClick={() => {
                 setNotice(null);
                 void startLibraryScan(library.id)
@@ -241,6 +245,34 @@ export function LibraryDetailView({ libraryId }: { libraryId: number }) {
                 </span>
               ) : (
                 "扫描库"
+              )}
+            </button>
+            <button
+              type="button"
+              disabled={busy && !library.organizing}
+              onClick={() => {
+                setNotice(null);
+                setOrganizeTarget(library);
+              }}
+              className="btn-glass px-4 py-2 text-[13px] font-medium disabled:opacity-50"
+            >
+              {library.organizing ? (
+                <span className="flex items-center gap-2">
+                  <span className="size-3.5 animate-spin rounded-full border-2 border-white/25 border-t-white/80" />
+                  整理中…
+                  {library.organize_progress && library.organize_progress.total > 0
+                    ? ` ${Math.min(
+                        100,
+                        Math.round(
+                          (library.organize_progress.processed /
+                            library.organize_progress.total) *
+                            100,
+                        ),
+                      )}%`
+                    : ""}
+                </span>
+              ) : (
+                "整理文件名"
               )}
             </button>
             <button
@@ -310,6 +342,12 @@ export function LibraryDetailView({ libraryId }: { libraryId: number }) {
           setEditing(null);
           reload();
         }}
+      />
+
+      <LibraryOrganizeDialog
+        library={organizeTarget}
+        onClose={() => setOrganizeTarget(null)}
+        onChanged={reload}
       />
     </div>
   );

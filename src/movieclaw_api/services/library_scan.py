@@ -100,9 +100,18 @@ def scan_progress(library_id: int) -> tuple[int, int] | None:
 
 async def scan_library(library_id: int) -> ScanSummary:
     """扫描一个库的全部根路径（后台任务入口；自开会话，不向外抛异常）。"""
+    from movieclaw_api.services.library_organize import is_organizing
+
     summary = ScanSummary(library_id=library_id)
     if library_id in _scanning:
         summary.errors.append("该库已有扫描在进行中")
+        return summary
+    # 与整理互斥：整理在批量改名，扫描此刻介入会把刚搬走的旧路径标 missing、
+    # 把新路径当新文件重走识别链（人工认领可能丢失）。手动扫描、watchdog
+    # 去抖、6 小时对账三个入口都收敛到这里，统一挡下（整理中台账已同步
+    # 更新，无需扫描补账，漏掉的变更由下轮对账兜底）
+    if is_organizing(library_id):
+        summary.errors.append("该库正在整理文件名，扫描已跳过（整理完成后可重新扫描）")
         return summary
     _scanning.add(library_id)
     try:

@@ -49,10 +49,28 @@ class LastScanView(BaseModel):
 
 
 class ScanProgressView(BaseModel):
-    """进行中扫描的实时进度（前端在库封面上画进度环）。"""
+    """进行中扫描/整理的实时进度（前端在库封面上画进度环，两种任务共用）。"""
 
     processed: int
     total: int
+
+
+class LastOrganizeView(BaseModel):
+    """最近一次整理的结论——给用户"整理完成了什么"的反馈。"""
+
+    finished_at: datetime
+    renamed: int = Field(description="改名归位的主文件数")
+    sidecars_renamed: int = Field(description="跟随改名的附属文件数（字幕等）")
+    already_ok: int = Field(description="本就符合规范、无需动作的文件数")
+    skipped: int = Field(description="计划阶段跳过的文件数（原因见预览）")
+    removed_dirs: int = Field(description="搬空后清理掉的目录数")
+    errors: list[str] = Field(default_factory=list)
+
+    @field_serializer("finished_at")
+    def _serialize_utc(self, value: datetime) -> str:
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        return value.isoformat()
 
 
 class LibraryView(BaseModel):
@@ -66,6 +84,11 @@ class LibraryView(BaseModel):
     scanning: bool = Field(default=False, description="是否正在扫描")
     scan_progress: ScanProgressView | None = Field(default=None, description="扫描实时进度")
     last_scan: LastScanView | None = Field(default=None, description="最近一次扫描结论")
+    organizing: bool = Field(default=False, description="是否正在整理文件名")
+    organize_progress: ScanProgressView | None = Field(
+        default=None, description="整理实时进度（与扫描进度同构）"
+    )
+    last_organize: LastOrganizeView | None = Field(default=None, description="最近一次整理结论")
     created_at: datetime
     updated_at: datetime
 
@@ -86,6 +109,9 @@ class LibraryView(BaseModel):
         scanning: bool = False,
         scan_progress: ScanProgressView | None = None,
         last_scan: LastScanView | None = None,
+        organizing: bool = False,
+        organize_progress: ScanProgressView | None = None,
+        last_organize: LastOrganizeView | None = None,
     ) -> LibraryView:
         return cls(
             id=row.id,  # type: ignore[arg-type]  # 落库后必有主键
@@ -98,6 +124,9 @@ class LibraryView(BaseModel):
             scanning=scanning,
             scan_progress=scan_progress,
             last_scan=last_scan,
+            organizing=organizing,
+            organize_progress=organize_progress,
+            last_organize=last_organize,
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
@@ -226,6 +255,51 @@ class UnidentifiedClearPayload(BaseModel):
 
 class ScanResultView(BaseModel):
     """扫描启动响应。"""
+
+    started: bool
+    message: str
+
+
+class OrganizeSidecarView(BaseModel):
+    """跟随主文件改名的附属文件（字幕等）。"""
+
+    source_path: str
+    target_path: str
+
+
+class OrganizeRenameView(BaseModel):
+    """预览里的一条改名计划：旧路径 → 规范路径。"""
+
+    file_id: int
+    media_item_id: int = Field(description="所属条目——前端按条目分组展示")
+    title: str
+    year: int | None
+    source_path: str
+    target_path: str
+    source_rel: str = Field(description="相对所在库根的旧路径（展示用）")
+    target_rel: str = Field(description="相对所在库根的规范路径（展示用）")
+    size_bytes: int
+    sidecars: list[OrganizeSidecarView] = Field(default_factory=list)
+
+
+class OrganizeSkipView(BaseModel):
+    """预览里的一条跳过说明：哪个文件、为什么不动它。"""
+
+    file_path: str
+    reason: str
+
+
+class OrganizePreviewView(BaseModel):
+    """整理预览：完整的「将要发生什么」清单，用户确认后才执行。"""
+
+    total: int = Field(description="台账在位文件总数（= 改名 + 已规范 + 跳过）")
+    already_ok: int = Field(description="已符合规范命名的文件数")
+    renames: list[OrganizeRenameView]
+    skips: list[OrganizeSkipView]
+
+
+class OrganizeStartView(BaseModel):
+    """整理启动响应。"""
 
     started: bool
     message: str

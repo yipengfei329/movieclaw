@@ -9,6 +9,7 @@ from sqlmodel import select
 from movieclaw_api.exceptions import BadRequestException, ConflictException, NotFoundException
 from movieclaw_api.schemas.library import (
     ClaimPayload,
+    LastOrganizeView,
     LastScanView,
     LibraryItemView,
     LibraryPayload,
@@ -17,6 +18,11 @@ from movieclaw_api.schemas.library import (
     MissingClearPayload,
     MissingFileView,
     MissingItemView,
+    OrganizePreviewView,
+    OrganizeRenameView,
+    OrganizeSidecarView,
+    OrganizeSkipView,
+    OrganizeStartView,
     RedownloadPayload,
     ScanProgressView,
     ScanResultView,
@@ -26,6 +32,13 @@ from movieclaw_api.schemas.library import (
 )
 from movieclaw_api.schemas.response import ApiResponse, ok
 from movieclaw_api.services.library_config import LibraryConfigService
+from movieclaw_api.services.library_organize import (
+    build_organize_plan,
+    is_organizing,
+    last_organize,
+    organize_library,
+    organize_progress,
+)
 from movieclaw_api.services.library_scan import (
     is_scanning,
     last_scan,
@@ -63,6 +76,32 @@ def _last_scan_view(library_id: int) -> LastScanView | None:
         identified=summary.identified,
         unidentified=summary.unidentified,
         marked_missing=summary.marked_missing,
+        errors=list(summary.errors),
+    )
+
+
+def _organize_progress_view(library_id: int) -> ScanProgressView | None:
+    """进行中整理的实时进度；没在整理返回 None。"""
+    progress = organize_progress(library_id)
+    if progress is None:
+        return None
+    processed, total = progress
+    return ScanProgressView(processed=processed, total=total)
+
+
+def _last_organize_view(library_id: int) -> LastOrganizeView | None:
+    """把进程内的最近整理记录转成接口视图；没整理过返回 None。"""
+    record = last_organize(library_id)
+    if record is None:
+        return None
+    finished_at, summary = record
+    return LastOrganizeView(
+        finished_at=finished_at,
+        renamed=summary.renamed,
+        sidecars_renamed=summary.sidecars_renamed,
+        already_ok=summary.already_ok,
+        skipped=summary.skipped,
+        removed_dirs=summary.removed_dirs,
         errors=list(summary.errors),
     )
 
@@ -107,6 +146,9 @@ async def list_libraries(
                 scanning=is_scanning(r.id or -1),
                 scan_progress=_scan_progress_view(r.id or -1),
                 last_scan=_last_scan_view(r.id or -1),
+                organizing=is_organizing(r.id or -1),
+                organize_progress=_organize_progress_view(r.id or -1),
+                last_organize=_last_organize_view(r.id or -1),
             )
             for r in rows
         ]
@@ -158,6 +200,9 @@ async def get_library(
             scanning=is_scanning(library_id),
             scan_progress=_scan_progress_view(library_id),
             last_scan=_last_scan_view(library_id),
+            organizing=is_organizing(library_id),
+            organize_progress=_organize_progress_view(library_id),
+            last_organize=_last_organize_view(library_id),
         )
     )
 
@@ -242,10 +287,83 @@ async def start_scan(
     library = await service.get(library_id)
     if is_scanning(library_id):
         raise ConflictException(f"「{library.name}」正在扫描中，请等待完成")
+    if is_organizing(library_id):
+        raise ConflictException(f"「{library.name}」正在整理文件名，请等待整理完成后再扫描")
     background_tasks.add_task(scan_library, library_id)
     return ok(
         ScanResultView(started=True, message=f"已开始扫描「{library.name}」"),
         message=f"已开始扫描「{library.name}」，完成后库存自动更新",
+    )
+
+
+# ---------------------------------------------------------------------------
+# 整理（存量规范化）：预览 / 执行
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{library_id}/organize/preview",
+    response_model=ApiResponse[OrganizePreviewView],
+    summary="预览整理计划：每个文件改成什么名、哪些跳过及原因（只读，不动磁盘）",
+)
+async def preview_organize(
+    library_id: int,
+    session: AsyncSession = Depends(get_session),
+) -> ApiResponse[OrganizePreviewView]:
+    """按刮削结果计算规范命名计划。纯只读——真正执行前用户在前端逐条
+    确认；执行接口会重新计算计划，预览与执行之间的磁盘变化不会造成误改。"""
+    service = LibraryConfigService(session)
+    library = await service.get(library_id)
+    plan = await build_organize_plan(session, library)
+    return ok(
+        OrganizePreviewView(
+            total=plan.total,
+            already_ok=plan.already_ok,
+            renames=[
+                OrganizeRenameView(
+                    file_id=a.file_id,
+                    media_item_id=a.media_item_id,
+                    title=a.title,
+                    year=a.year,
+                    source_path=a.source_path,
+                    target_path=a.target_path,
+                    source_rel=a.source_rel,
+                    target_rel=a.target_rel,
+                    size_bytes=a.size_bytes,
+                    sidecars=[
+                        OrganizeSidecarView(source_path=s.source_path, target_path=s.target_path)
+                        for s in a.sidecars
+                    ],
+                )
+                for a in plan.renames
+            ],
+            skips=[OrganizeSkipView(file_path=s.file_path, reason=s.reason) for s in plan.skips],
+        )
+    )
+
+
+@router.post(
+    "/{library_id}/organize",
+    response_model=ApiResponse[OrganizeStartView],
+    summary="开始整理：按规范命名批量改名归位（后台执行，与扫描互斥）",
+)
+async def start_organize(
+    library_id: int,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
+) -> ApiResponse[OrganizeStartView]:
+    """执行时重新计算计划并逐文件「改名 → 台账随迁」。改名直接发生在
+    磁盘上、无法一键撤销——前端必须先展示预览并取得用户确认再调用。"""
+    service = LibraryConfigService(session)
+    library = await service.get(library_id)
+    if is_organizing(library_id):
+        raise ConflictException(f"「{library.name}」正在整理中，请等待完成")
+    if is_scanning(library_id):
+        raise ConflictException(f"「{library.name}」正在扫描中，请等待扫描完成后再整理")
+    background_tasks.add_task(organize_library, library_id)
+    return ok(
+        OrganizeStartView(started=True, message=f"已开始整理「{library.name}」"),
+        message=f"已开始整理「{library.name}」，完成后文件名将符合规范",
     )
 
 
@@ -486,9 +604,7 @@ async def redownload_missing(
     if not rows:
         raise BadRequestException("该条目没有缺失文件")
     units = {(r.season_number, r.episode_number) for r in rows}
-    subscriptions = SubscriptionService(
-        session, MediaLibraryService(session, get_tmdb_client())
-    )
+    subscriptions = SubscriptionService(session, MediaLibraryService(session, get_tmdb_client()))
     subscription, requeued = await subscriptions.redownload_missing_units(
         MediaKind(item.kind), item, units, library_id=payload.library_id
     )
