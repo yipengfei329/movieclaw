@@ -18,6 +18,17 @@ export type DownloaderClientType = "qbittorrent" | "transmission";
 /** 连接验证状态（与站点配置共用同一状态机语义）。 */
 export type DownloaderStatus = "pending" | "verifying" | "active" | "failed";
 
+/**
+ * 一条路径映射：movieclaw 视角的目录前缀 → 下载器视角的对应前缀。
+ * 跨容器/跨主机部署同一块盘两边路径不同时配置；视角一致留空。
+ */
+export interface PathMapping {
+  /** movieclaw 上的路径前缀（目录弹窗选择） */
+  local: string;
+  /** 下载器上的对应路径前缀（手动填写） */
+  remote: string;
+}
+
 /** 已配置下载器的对外视图（见 schemas.downloader.DownloaderView，脱敏无密码）。 */
 export interface ConfiguredDownloader {
   id: number;
@@ -26,6 +37,8 @@ export interface ConfiguredDownloader {
   url: string;
   username: string | null;
   save_path: string | null;
+  /** 路径映射（movieclaw 路径 → 下载器路径）；null = 两边视角一致 */
+  path_mappings: PathMapping[] | null;
   enabled: boolean;
   /** 是否为默认下载器（一键下载不选目标时投给它） */
   is_default: boolean;
@@ -48,6 +61,7 @@ export interface DownloaderPayload {
   username?: string | null;
   password?: string | null;
   save_path?: string | null;
+  path_mappings?: PathMapping[] | null;
   enabled?: boolean;
 }
 
@@ -131,6 +145,8 @@ export interface DownloadSubmitPayload {
   year?: number | null;
   /** 种子副标题（识别线索：中文片名/「全N集」帮扫描器收敛拼音命名种子） */
   subtitle?: string | null;
+  /** 下载弹窗手选的保存目录（movieclaw 视角，优先于库推导） */
+  save_path?: string | null;
 }
 
 /** 手动提交下载的结果（见 schemas.downloader.DownloadSubmitView）。 */

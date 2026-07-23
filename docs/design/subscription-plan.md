@@ -245,7 +245,7 @@ apps/web/
 |---|---|---|
 | 4.1 | ✅ F4 wanted_search：条目分组搜索、结果落库(source=SEARCH)、退避、失败短冷却 | ✅ 失败/无果/命中三态测试 |
 | 4.2 | ✅ F2 torrent_matcher：水位驱动（首跑初始化=当前最大 id，历史缓存不参与——铁律落点）+ sync 尾调 + 兜底任务 | ✅ 水位跳历史/跟新/幂等 |
-| 4.3 | ✅ F5 download_dispatch：条件更新认领、dry-run 日志投递器（开关 SUBSCRIPTION_DISPATCH_DRY_RUN）、失败回滚+退避、真实路径就位 | ✅ 认领竞态、整季包优先选优 |
+| 4.3 | ✅ F5 download_dispatch：条件更新认领、失败回滚+退避；真实投递已启用（2026-07-24，保存目录过下载器路径映射翻译），SUBSCRIPTION_DISPATCH_DRY_RUN=true 可切回模拟投递调试 | ✅ 认领竞态、整季包优先选优 |
 | 4.4 | ✅ F3 media_refresh：分档刷新、新集生长、定档回填、别名保鲜 | ✅ mock diff 新集→追新工单+活动 |
 | — | ✅ **端到端验收**（stub 环境） | 详情页时间线完整流水：搜索失败(原因)→720p 拒绝(中文原因)→2160p 整季包模拟投递；追踪明细推进"已提交下载" |
 

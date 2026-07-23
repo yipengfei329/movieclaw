@@ -135,6 +135,32 @@ export interface CreateSubscriptionPayload {
   douban_id?: string | null;
 }
 
+/** 投递路由预检（见 schemas.subscription.DispatchPreviewView）。 */
+export interface DispatchPreview {
+  /** watch=投监听导入目录 / inplace=直接下载进库 / downloader_default=下载器默认目录 */
+  mode: "watch" | "inplace" | "downloader_default";
+  /** movieclaw 视角的投递基底目录 */
+  path: string | null;
+  library_name: string | null;
+  downloader_name: string | null;
+  /** 按当前配置投递能否顺利入库 */
+  ok: boolean;
+  /** 不 ok 时的中文指引 */
+  warning: string | null;
+}
+
+/** 投递路由预检：订阅弹窗选库时调用，预演下载会落到哪、能否自动入库。 */
+export function getDispatchPreview(
+  kind: string,
+  libraryId: number | null,
+): Promise<DispatchPreview> {
+  const params = new URLSearchParams({ kind });
+  if (libraryId !== null) params.set("library_id", String(libraryId));
+  return unwrap(
+    request<ApiEnvelope<DispatchPreview>>(`/subscriptions/dispatch-preview?${params}`),
+  );
+}
+
 /** 订阅预检：建档条目并返回季集结构（打开订阅弹层时调用，幂等）。 */
 export function prepareSubscription(payload: PreparePayload): Promise<PrepareResult> {
   return unwrap(
@@ -224,7 +250,10 @@ export interface SubscriptionActivity {
     | "match_rejected"
     | "grabbed"
     | "dispatch_failed"
-    | "wanted_added";
+    | "wanted_added"
+    | "downloaded"
+    | "imported"
+    | "import_failed";
   message: string;
   payload: Record<string, unknown>;
   created_at: string;

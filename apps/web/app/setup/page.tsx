@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { AuthError, AuthField, AuthScreen } from "@/components/auth-screen";
 import { createAdmin, getBootstrapStatus } from "@/lib/api/auth";
+import { usePageTitle } from "@/lib/use-page-title";
 import { HttpError } from "@/lib/http";
 
 /**
@@ -15,6 +16,7 @@ import { HttpError } from "@/lib/http";
  * 改前端代码绕不过去。
  */
 export default function SetupPage() {
+  usePageTitle("初始化");
   const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");

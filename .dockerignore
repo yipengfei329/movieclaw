@@ -1,0 +1,22 @@
+# 依赖与构建产物（镜像内各阶段自行安装/构建）
+node_modules
+**/node_modules
+.venv
+apps/web/.next*
+apps/extension/.output
+**/__pycache__
+
+# 运行期数据与本地配置（.env 含密钥，绝不能进构建上下文）
+data
+.env
+
+# 与运行镜像无关的目录
+ml
+tests
+docs
+plans
+scripts
+.git
+.github
+.claude
+*.md

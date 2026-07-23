@@ -8,6 +8,26 @@ from movieclaw_db.models.downloader_client import ClientType, DownloaderClient
 from movieclaw_db.models.site_credential import ConfigStatus
 
 
+class PathMapping(BaseModel):
+    """一条路径映射：movieclaw 视角的目录前缀 → 下载器视角的对应前缀。
+
+    跨容器/跨主机部署时同一块盘两边挂载路径不同（movieclaw 看到
+    ``/data/downloads``，下载器容器里是 ``/downloads``），提交下载前
+    按最长前缀把保存目录翻译成下载器视角。视角一致的部署无需配置。
+    """
+
+    local: str = Field(min_length=1, description="movieclaw 上的路径前缀")
+    remote: str = Field(min_length=1, description="下载器上的对应路径前缀")
+
+    @field_validator("local", "remote")
+    @classmethod
+    def _validate_abs(cls, value: str) -> str:
+        value = value.strip().rstrip("/")
+        if not value.startswith("/"):
+            raise ValueError("路径映射两端都必须是以 / 开头的绝对路径")
+        return value
+
+
 class DownloaderView(BaseModel):
     """下载器配置的对外视图（**脱敏**：绝不回传密码）。"""
 
@@ -17,6 +37,9 @@ class DownloaderView(BaseModel):
     url: str
     username: str | None = None
     save_path: str | None = Field(default=None, description="提交下载时的默认保存目录")
+    path_mappings: list[PathMapping] | None = Field(
+        default=None, description="路径映射（movieclaw 路径 → 下载器路径）"
+    )
     enabled: bool
     is_default: bool = Field(description="是否为默认下载器（一键下载不选目标时投给它）")
     status: ConfigStatus
@@ -46,6 +69,7 @@ class DownloaderView(BaseModel):
             url=row.url,
             username=row.username,
             save_path=row.save_path,
+            path_mappings=row.path_mappings,  # type: ignore[arg-type]  # 落库前已按 PathMapping 规范化
             enabled=row.enabled,
             is_default=row.is_default,
             status=row.status,
@@ -71,6 +95,10 @@ class DownloaderPayload(BaseModel):
     username: str | None = Field(default=None, description="登录用户名（未开鉴权可留空）")
     password: str | None = Field(default=None, description="登录密码（未开鉴权可留空）")
     save_path: str | None = Field(default=None, description="默认保存目录（留空用下载器默认）")
+    path_mappings: list[PathMapping] | None = Field(
+        default=None,
+        description="路径映射（movieclaw 路径 → 下载器路径，视角一致时留空）",
+    )
     enabled: bool = Field(default=True, description="是否启用（默认启用）")
 
     @field_validator("name", "url", "username", "password", "save_path", mode="before")
@@ -88,6 +116,25 @@ class DownloaderPayload(BaseModel):
         if not value.startswith(("http://", "https://")):
             raise ValueError("下载器地址必须以 http:// 或 https:// 开头")
         return value.rstrip("/")
+
+    @field_validator("path_mappings")
+    @classmethod
+    def _normalize_mappings(cls, value: list[PathMapping] | None) -> list[PathMapping] | None:
+        """空列表归一为 None；两端各自查重。
+
+        同一 movieclaw 路径配两条映射，翻译结果取决于遍历顺序（纯配置错误）；
+        两条映射指向同一下载器路径同样是错配。PathMapping 校验已去掉尾部斜杠，
+        这里的比较天然把 ``/data/`` 与 ``/data`` 视为重复。
+        """
+        if not value:
+            return None
+        locals_ = [m.local for m in value]
+        if len(set(locals_)) != len(locals_):
+            raise ValueError("路径映射中 movieclaw 路径不能重复")
+        remotes = [m.remote for m in value]
+        if len(set(remotes)) != len(remotes):
+            raise ValueError("路径映射中下载器路径不能重复")
+        return value
 
 
 class DownloaderStatusUpdate(BaseModel):
@@ -114,6 +161,19 @@ class DownloadSubmitPayload(BaseModel):
     # 副标题作识别信号：落 download_hint，扫描器用其中的中文片名/「全N集」
     # 收敛拼音命名种子（TorrentHit.subtitle 原样带过来即可）
     subtitle: str | None = Field(default=None, description="种子副标题（识别线索用）")
+    # 用户在下载弹窗里手选的保存目录（movieclaw 视角）：给出时优先于库推导，
+    # 提交前照常过路径映射翻译与覆盖守门
+    save_path: str | None = Field(default=None, description="手选保存目录（覆盖库推导）")
+
+    @field_validator("save_path")
+    @classmethod
+    def _validate_save_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip().rstrip("/")
+        if not value.startswith("/"):
+            raise ValueError("保存目录必须是以 / 开头的绝对路径")
+        return value
 
 
 class DownloadSubmitView(BaseModel):
@@ -124,4 +184,6 @@ class DownloadSubmitView(BaseModel):
     already_exists: bool = Field(description="种子提交前已存在于下载器（幂等，未重复添加）")
     downloader_id: int = Field(description="接收本次提交的下载器 ID")
     downloader_name: str = Field(description="接收本次提交的下载器名称")
-    save_path: str | None = Field(description="实际使用的保存目录（空 = 下载器自身默认目录）")
+    save_path: str | None = Field(
+        description="实际使用的保存目录（下载器视角，已过路径映射；空 = 下载器自身默认目录）"
+    )

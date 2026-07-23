@@ -64,6 +64,7 @@ class DownloaderRepository:
         username: str | None,
         password: str | None,
         save_path: str | None,
+        path_mappings: list[dict[str, str]] | None = None,
         enabled: bool = True,
     ) -> DownloaderClient:
         """新增一个下载器配置（状态置 PENDING，等待异步测试连接）。
@@ -77,6 +78,7 @@ class DownloaderRepository:
             username=username,
             password=get_secret_box().encrypt(password) if password else None,
             save_path=save_path,
+            path_mappings=path_mappings,
             enabled=enabled,
             status=ConfigStatus.PENDING,
             is_default=await self.get_default() is None,
@@ -96,6 +98,7 @@ class DownloaderRepository:
         username: str | None,
         password: str | None,
         save_path: str | None,
+        path_mappings: list[dict[str, str]] | None = None,
         enabled: bool,
     ) -> DownloaderClient | None:
         """整体覆盖一条下载器配置；不存在返回 None。
@@ -112,6 +115,7 @@ class DownloaderRepository:
         row.username = username
         row.password = get_secret_box().encrypt(password) if password else None
         row.save_path = save_path
+        row.path_mappings = path_mappings
         row.enabled = enabled
         row.status = ConfigStatus.PENDING
         row.last_error = None

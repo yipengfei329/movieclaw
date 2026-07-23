@@ -14,6 +14,7 @@ import {
   type AgentTurnToolCall,
   useAgentConversations,
 } from "@/lib/agent-conversations";
+import { usePageTitle } from "@/lib/use-page-title";
 
 /**
  * Agent 会话页（/runs/[id]）—— 仿 ChatGPT 的对话交互：
@@ -23,6 +24,7 @@ import {
 export function AgentConversationView({ conversationId }: { conversationId: string }) {
   const { get, open, send, stop } = useAgentConversations();
   const conversation = get(conversationId);
+  usePageTitle(conversation?.title);
   const [input, setInput] = useState("");
   // 服务端详情加载失败的提示（404 = 会话不存在；其余为网络/服务错误）
   const [loadError, setLoadError] = useState<string | null>(null);

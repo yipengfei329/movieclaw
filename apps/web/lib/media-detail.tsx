@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { useRouter } from "next/navigation";
 import type { Route } from "next";
 
+import type { BreadcrumbItem } from "@/components/breadcrumb";
 import type { MediaItem, MediaSource } from "@/lib/media-types";
 
 /**
@@ -21,6 +22,38 @@ export function getMediaSeed(source: MediaSource, id: string): MediaItem | undef
   return seedCache.get(`${source}:${id}`);
 }
 
+/**
+ * 来路缓存：点开详情时记下「从哪个列表页来」，详情页面包屑据此渲染父级——
+ * 从发现页 / 搜索页 / 订阅页点进同一部影片，向上回到的就是来的那个列表
+ * （含查询串原样回跳）。硬刷新 / 分享直达时缓存为空，详情页按影片类型
+ * 兜底到「发现电影 / 发现剧集」。与 seedCache 同生命周期、同上限策略。
+ */
+const originCache = new Map<string, BreadcrumbItem[]>();
+
+export function getMediaOrigin(source: MediaSource, id: string): BreadcrumbItem[] | undefined {
+  return originCache.get(`${source}:${id}`);
+}
+
+/** 由「点开详情时所在的页面」推导来路面包屑；不认识的来路（如详情页内的相似推荐）返回 null。 */
+function originTrailOf(pathname: string, search: string): BreadcrumbItem[] | null {
+  const here = pathname + search;
+  if (pathname === "/discover/movie") return [{ label: "发现电影", href: here }];
+  if (pathname === "/discover/tv") return [{ label: "发现剧集", href: here }];
+  if (pathname === "/discover/movie/top250") {
+    return [
+      { label: "发现电影", href: "/discover/movie" },
+      { label: "豆瓣电影 Top 250", href: here },
+    ];
+  }
+  if (pathname === "/search") {
+    const keyword = new URLSearchParams(search).get("q")?.trim();
+    return keyword ? [{ label: `搜索“${keyword}”`, href: here }] : null;
+  }
+  if (pathname.startsWith("/subscriptions")) return [{ label: "我的订阅", href: "/subscriptions" }];
+  if (pathname.startsWith("/library")) return [{ label: "媒体库", href: "/library" }];
+  return null;
+}
+
 export interface MediaDetailNav {
   /** 打开某部影片的详情页（种下 seed 后跳路由） */
   open: (item: MediaItem) => void;
@@ -33,9 +66,16 @@ export function useMediaDetail(): MediaDetailNav {
   return useMemo(
     () => ({
       open(item: MediaItem) {
-        if (seedCache.size > 100) seedCache.clear(); // 防止长会话无限增长的粗粒度上限
+        if (seedCache.size > 100) {
+          // 防止长会话无限增长的粗粒度上限
+          seedCache.clear();
+          originCache.clear();
+        }
         const source = item.source ?? "tmdb";
         seedCache.set(`${source}:${item.id}`, item);
+        const trail = originTrailOf(window.location.pathname, window.location.search);
+        if (trail) originCache.set(`${source}:${item.id}`, trail);
+        else originCache.delete(`${source}:${item.id}`);
         router.push(
           source === "douban"
             ? (`/media/douban/${item.id}` as Route)

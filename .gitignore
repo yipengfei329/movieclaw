@@ -19,7 +19,7 @@ htmlcov/
 # Node / pnpm / Next.js
 node_modules/
 .next/
-.next-preview*/
+.next-*/
 out/
 .pnpm-store/
 *.tsbuildinfo

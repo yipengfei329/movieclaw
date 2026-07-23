@@ -24,8 +24,9 @@ import type { MediaType } from "@/lib/media-types";
  * 卡片通过 useSubscribeEntry().open(item) 触发，与 useMediaDetail 的模式一致。
  *
  * 订阅状态同理收口在这里：应用启动拉取一次订阅列表，卡片与详情页都通过
- * subscriptionOf(item) 判断「该影片是否已订阅」，避免每张卡片各自发请求；
- * 弹层里订阅/取消订阅成功后（onChanged）自动刷新，所有消费方即时同步。
+ * subscriptionOf(item) 判断「该影片是否已订阅」，订阅页海报墙直接渲染
+ * subscriptions 列表，避免每处各自维护一份快照；弹层里订阅/取消订阅成功后
+ * （onChanged）自动刷新，所有消费方即时同步。
  *
  * kind（电影/剧集）是订阅预检的必填参数：发现页与 TMDB 搜索结果的卡片自带
  * type；豆瓣轻量搜索结果没有 type，点击时补拉一次豆瓣详情由后端识别类型
@@ -37,8 +38,10 @@ interface SubscribeEntryValue {
   open: (item: PosterVisualItem) => Promise<void>;
   /** 查找该影片已存在的订阅；未订阅（或列表尚未加载完成）返回 undefined */
   subscriptionOf: (item: SubscriptionLookupKey) => Subscription | undefined;
-  /** 重新拉取订阅列表（订阅/取消订阅后调用，卡片状态即时刷新） */
-  refresh: () => void;
+  /** 全站订阅列表；null = 首次拉取尚未完成（订阅页据此渲染加载态） */
+  subscriptions: Subscription[] | null;
+  /** 重新拉取订阅列表（订阅/取消订阅后调用，卡片状态即时刷新）；resolve false 表示拉取失败 */
+  refresh: () => Promise<boolean>;
 }
 
 /** 订阅状态查询的最小键：来源 + 外部 ID（TMDB 来源还需 type 消除电影/剧集撞号）。 */
@@ -81,18 +84,21 @@ export function useSubscribeEntry(): SubscribeEntryValue {
 
 export function SubscribeEntryProvider({ children }: { children: ReactNode }) {
   const [target, setTarget] = useState<SubscribeTarget | null>(null);
-  // 全站订阅列表：启动拉取一次；失败保持空数组——状态判断降级为「都未订阅」，
+  // 全站订阅列表：启动拉取一次；失败不覆盖已有数据——状态判断降级为「都未订阅」，
   // 不影响订阅入口本身（弹层预检有自己的错误提示）
-  const [subs, setSubs] = useState<Subscription[]>([]);
+  const [subs, setSubs] = useState<Subscription[] | null>(null);
 
-  const refresh = useCallback(() => {
-    listSubscriptions()
-      .then(setSubs)
-      .catch(() => {});
+  const refresh = useCallback(async () => {
+    try {
+      setSubs(await listSubscriptions());
+      return true;
+    } catch {
+      return false;
+    }
   }, []);
 
   useEffect(() => {
-    refresh();
+    void refresh();
   }, [refresh]);
 
   const open = useCallback(async (item: PosterVisualItem) => {
@@ -114,13 +120,13 @@ export function SubscribeEntryProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const subscriptionOf = useCallback(
-    (key: SubscriptionLookupKey) => findSubscription(subs, key),
+    (key: SubscriptionLookupKey) => findSubscription(subs ?? [], key),
     [subs],
   );
 
   const value = useMemo(
-    () => ({ open, subscriptionOf, refresh }),
-    [open, subscriptionOf, refresh],
+    () => ({ open, subscriptionOf, subscriptions: subs, refresh }),
+    [open, subscriptionOf, subs, refresh],
   );
 
   return (

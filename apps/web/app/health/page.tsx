@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import { getHealth, type HealthResponse } from "@/lib/api/health";
 import { HttpError } from "@/lib/http";
+import { usePageTitle } from "@/lib/use-page-title";
 
 type LoadState =
   | { status: "loading"; data: null; error: null }
@@ -23,6 +24,7 @@ function toErrorMessage(error: unknown): string {
 }
 
 export default function HealthPage() {
+  usePageTitle("服务状态");
   const [state, setState] = useState<LoadState>({
     status: "loading",
     data: null,

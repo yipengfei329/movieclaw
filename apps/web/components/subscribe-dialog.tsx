@@ -8,8 +8,10 @@ import { listLibraries, type MediaLibrary } from "@/lib/api/libraries";
 import {
   createSubscription,
   deleteSubscription,
+  getDispatchPreview,
   listRuleSets,
   prepareSubscription,
+  type DispatchPreview,
   type PrepareResult,
   type ResolveCandidate,
   type RuleSet,
@@ -61,6 +63,27 @@ export function SubscribeDialog({
   const [ruleSetId, setRuleSetId] = useState<number | null>(null);
   const [libraryId, setLibraryId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  // 投递路由预检：选库即预演"下载会落到哪、能否自动入库"，配置问题当场亮出
+  const [dispatchPreview, setDispatchPreview] = useState<DispatchPreview | null>(null);
+
+  useEffect(() => {
+    if (!target || libraryId === null) {
+      setDispatchPreview(null);
+      return;
+    }
+    let cancelled = false;
+    setDispatchPreview(null);
+    getDispatchPreview(target.kind, libraryId)
+      .then((p) => {
+        if (!cancelled) setDispatchPreview(p);
+      })
+      .catch(() => {
+        /* 预检失败静默：只是提示层，不影响订阅主流程 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [target, libraryId]);
 
   /** 预检并按结果初始化表单默认值（候选确认后会带着 tmdbId 再次进入）。 */
   const runPrepare = useCallback(
@@ -358,19 +381,41 @@ export function SubscribeDialog({
                       </option>
                     ))}
                   </select>
-                  {/* 落盘路径预览：主根/标题 (年份)，与后端推导规则一致 */}
-                  {(() => {
-                    const lib = libraries.find((l) => l.id === libraryId);
-                    if (!lib?.primary_root || !prepared.media) return null;
-                    const folder = `${prepared.media.title}${
-                      prepared.media.year ? ` (${prepared.media.year})` : ""
-                    }`;
-                    return (
-                      <p className="mt-1.5 truncate text-[11.5px] text-[var(--text-faint)]">
-                        将保存到 {lib.primary_root.replace(/\/+$/, "")}/{folder}
+                  {/* 投递路由预检：与后端真实投递同源判定，配置问题当场亮出 */}
+                  {dispatchPreview &&
+                    (dispatchPreview.ok ? (
+                      <p className="mt-1.5 text-[11.5px] leading-relaxed text-[var(--text-faint)]">
+                        {dispatchPreview.mode === "watch" ? (
+                          <>
+                            将投递到监听导入目录{" "}
+                            <span className="font-mono">{dispatchPreview.path}</span>
+                            ，下载完成后自动整理入库
+                          </>
+                        ) : (
+                          (() => {
+                            const folder = prepared.media
+                              ? `/${prepared.media.title}${
+                                  prepared.media.year ? ` (${prepared.media.year})` : ""
+                                }`
+                              : "";
+                            return (
+                              <>
+                                将直接下载到库内目录{" "}
+                                <span className="font-mono">
+                                  {dispatchPreview.path?.replace(/\/+$/, "")}
+                                  {folder}
+                                </span>
+                                ，完成后自动入账
+                              </>
+                            );
+                          })()
+                        )}
                       </p>
-                    );
-                  })()}
+                    ) : (
+                      <p className="mt-1.5 rounded-lg border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-[11.5px] leading-relaxed text-amber-200">
+                        {dispatchPreview.warning}
+                      </p>
+                    ))}
                 </section>
               )}
 

@@ -20,7 +20,7 @@ import { changePassword, updateProfile, uploadAvatar } from "@/lib/api/auth";
 import { DEFAULT_UI_PREFS } from "@/lib/api/ui";
 import { HttpError } from "@/lib/http";
 import { useSession } from "@/lib/session";
-import { settingsSections } from "@/lib/mock-data";
+import { settingsSectionGroups, settingsSections } from "@/lib/mock-data";
 import { useUiPrefs } from "@/lib/ui-prefs";
 
 /**
@@ -67,32 +67,39 @@ export function SettingsSidebar({ active, onSelect, onBack }: SettingsSidebarPro
         <p className="mt-1 text-xs text-[var(--text-muted)]">管理账号与工作台偏好</p>
       </div>
 
-      {/* 分区列表：与工作台侧栏同语言——icon-chip 徽标 + 选中亮胶囊 */}
-      <nav className="scroll-thin flex-1 space-y-1 overflow-y-auto px-3 pb-4">
-        {settingsSections.map((section) => {
-          const Icon = section.icon;
-          return (
-            <button
-              key={section.id}
-              type="button"
-              data-active={active === section.id}
-              onClick={() => onSelect(section.id)}
-              className="glass-row nav-item px-2 py-2"
-            >
-              <span className="icon-chip size-9">
-                <Icon className="size-[18px]" />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block text-[13px] font-semibold text-[var(--text)]">
-                  {section.label}
-                </span>
-                <span className="block truncate text-[11px] text-[var(--text-muted)]">
-                  {section.description}
-                </span>
-              </span>
-            </button>
-          );
-        })}
+      {/* 分区列表：与工作台侧栏同语言——icon-chip 徽标 + 选中亮胶囊，按组分节 */}
+      <nav className="scroll-thin flex-1 space-y-4 overflow-y-auto px-3 pb-4">
+        {settingsSectionGroups.map((group) => (
+          <div key={group.label}>
+            <h3 className="group-label mb-1.5 px-2">{group.label}</h3>
+            <div className="space-y-1">
+              {group.items.map((section) => {
+                const Icon = section.icon;
+                return (
+                  <button
+                    key={section.id}
+                    type="button"
+                    data-active={active === section.id}
+                    onClick={() => onSelect(section.id)}
+                    className="glass-row nav-item px-2 py-2"
+                  >
+                    <span className="icon-chip size-9">
+                      <Icon className="size-[18px]" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[13px] font-semibold text-[var(--text)]">
+                        {section.label}
+                      </span>
+                      <span className="block truncate text-[11px] text-[var(--text-muted)]">
+                        {section.description}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </nav>
     </GlassPanel>
   );

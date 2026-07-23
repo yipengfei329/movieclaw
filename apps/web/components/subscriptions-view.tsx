@@ -5,7 +5,8 @@ import { useCallback, useEffect, useState } from "react";
 import type { Route } from "next";
 
 import { PosterCardVisual, type PosterVisualItem } from "@/components/poster-card";
-import { listSubscriptions, type Subscription } from "@/lib/api/subscriptions";
+import { useSubscribeEntry } from "@/components/subscribe-entry";
+import type { Subscription } from "@/lib/api/subscriptions";
 import { cachedImageUrl } from "@/lib/image-proxy";
 import {
   subscriptionProgressNote,
@@ -13,7 +14,11 @@ import {
 } from "@/lib/subscription-ui";
 
 /**
- * 订阅页：用户全部订阅的海报墙（数据来自 /subscriptions 接口）。
+ * 订阅页：用户全部订阅的海报墙。
+ *
+ * 数据直接消费 SubscribeEntryProvider 的全站订阅列表（唯一数据源）：
+ * 弹层里取消订阅后 context 刷新，这里的墙面即时同步，无需各自维护快照。
+ * 进入本页时主动 refresh 一次，保证工单进度是新鲜的。
  *
  * 结构：页头（标题 + 订阅总数说明）+ 自适应海报网格。
  * 每格复用发现页的 PosterCard，并在其下追加一行订阅状态
@@ -22,15 +27,13 @@ import {
  */
 export function SubscriptionsView() {
   const [mediaType, setMediaType] = useState<"movie" | "tv">("movie");
-  const [subscriptions, setSubscriptions] = useState<Subscription[] | null>(null);
+  const { subscriptions, refresh } = useSubscribeEntry();
   const [failed, setFailed] = useState(false);
 
   const reload = useCallback(() => {
     setFailed(false);
-    listSubscriptions()
-      .then(setSubscriptions)
-      .catch(() => setFailed(true));
-  }, []);
+    void refresh().then((ok) => setFailed(!ok));
+  }, [refresh]);
 
   useEffect(() => {
     reload();

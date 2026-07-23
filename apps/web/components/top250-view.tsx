@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 
-import { ArrowLeftIcon, SearchIcon } from "@/components/icons";
+import { Breadcrumb } from "@/components/breadcrumb";
+import { SearchIcon } from "@/components/icons";
 import { PosterCard } from "@/components/poster-card";
 import { fetchDiscoverPage } from "@/lib/api/discover";
 import type { MediaItem } from "@/lib/media-types";
@@ -104,13 +104,13 @@ export function Top250View() {
   return (
     <div className="scroll-thin flex-1 overflow-y-auto px-6 pb-12 pt-5">
       <header className="mx-auto max-w-[1500px]">
-        <Link
-          href="/discover/movie?source=douban"
-          className="inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--text-muted)] transition hover:text-[var(--text)]"
-        >
-          <ArrowLeftIcon className="size-4" />
-          返回发现电影
-        </Link>
+        {/* 面包屑：发现电影 › 豆瓣电影 Top 250（回跳保留豆瓣数据源视角） */}
+        <Breadcrumb
+          items={[
+            { label: "发现电影", href: "/discover/movie?source=douban" },
+            { label: "豆瓣电影 Top 250" },
+          ]}
+        />
         <div className="mt-5 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
           <div>
             <p className="text-xs font-semibold tracking-[0.18em] text-[var(--accent-2)]">

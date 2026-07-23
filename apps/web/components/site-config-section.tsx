@@ -2,9 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import type { Route } from "next";
+import Link from "next/link";
+
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 
-import { MoreIcon, PlusIcon, ServerIcon } from "@/components/icons";
+import { ChevronRightIcon, MoreIcon, PlusIcon, PuzzleIcon, ServerIcon } from "@/components/icons";
+import { useExtensionInstalled } from "@/lib/extension-install";
 import { useBackdrop } from "@/lib/backdrop";
 import type { ConfiguredSite, SiteAuthType, SiteStatus } from "@/lib/api/extension";
 import {
@@ -57,7 +61,7 @@ function fallbackItem(siteId: string): CatalogItem {
 }
 
 /**
- * 「资源站点配置」设置分区。
+ * 「资源站点」设置分区。
  *
  * 交互取舍：站点目录可能很多，全部平铺不现实。因此主列表**只展示用户已配置的站点**，
  * 通过「添加站点」入口从目录（GET /sites/catalog）里按需挑选未配置的站点再填表。
@@ -182,6 +186,9 @@ export function SiteConfigSection() {
         </div>
       </div>
 
+      {/* 插件引导：Cookie 站点推荐用 MovieClaw 浏览器插件管理，免手动粘贴 */}
+      <ExtensionPromoBanner />
+
       {/* 「添加站点」面板：从目录里挑选未配置的站点 */}
       {adding && (
         <AddSitePanel
@@ -234,6 +241,42 @@ export function SiteConfigSection() {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * 插件引导横幅：整条可点击，跳「设置 → 浏览器插件」分区。
+ * 文案随安装检测（useExtensionInstalled）切换——未安装时引导安装，
+ * 已安装时提示直接去站点页面同步；检测中不闪烁，先按未安装文案展示。
+ */
+function ExtensionPromoBanner() {
+  const { installed } = useExtensionInstalled();
+
+  return (
+    <Link
+      href={"/settings/extension" as Route}
+      className="css-glass group flex items-center gap-3.5 !rounded-xl px-4 py-3.5 transition-colors hover:!bg-[var(--glass-fill-hover)]"
+    >
+      <span className="icon-chip size-9 shrink-0 !rounded-xl">
+        <PuzzleIcon className="size-[18px]" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-[13px] font-semibold text-[var(--text)]">
+          {installed
+            ? "MovieClaw 浏览器插件已安装"
+            : "推荐：用 MovieClaw 浏览器插件管理站点"}
+        </span>
+        <span className="mt-0.5 block truncate text-[11px] text-[var(--text-muted)]">
+          {installed
+            ? "在站点页面点击工具栏图标即可同步登录 Cookie，并随变化自动保持最新。"
+            : "在站点页面一键同步登录 Cookie（含 httpOnly），免手动粘贴、自动保持最新。"}
+        </span>
+      </span>
+      <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-[var(--text-muted)] transition-colors group-hover:text-[var(--text)]">
+        {installed ? "查看插件" : "前往安装"}
+        <ChevronRightIcon className="size-4" />
+      </span>
+    </Link>
   );
 }
 
@@ -673,11 +716,25 @@ function SiteForm({ item, site, busy, onSubmit }: SiteFormProps) {
             <label className="mb-1.5 block text-xs font-medium text-[var(--text-muted)]">
               {fm.label}
             </label>
+            {/* Cookie 恰是插件的用武之地：就地提一句，不打断手动粘贴的用户 */}
+            {field === "cookie" && (
+              <p className="mb-1.5 text-[11px] text-[var(--text-faint)]">
+                手动粘贴的 Cookie 过期后需重填；推荐用
+                <Link
+                  href={"/settings/extension" as Route}
+                  className="mx-0.5 text-[var(--accent)] hover:underline"
+                >
+                  MovieClaw 浏览器插件
+                </Link>
+                自动同步。
+              </p>
+            )}
             {fm.kind === "textarea" ? (
               <textarea
                 value={values[field] ?? ""}
                 onChange={(e) => setValues((v) => ({ ...v, [field]: e.target.value }))}
                 rows={3}
+                autoComplete="off"
                 placeholder={site ? "出于安全，请重新填写" : ""}
                 className="scroll-thin w-full resize-none rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-[13px] text-[var(--text)] outline-none focus:border-[var(--accent)]/60"
               />
@@ -687,7 +744,8 @@ function SiteForm({ item, site, busy, onSubmit }: SiteFormProps) {
                 value={values[field] ?? ""}
                 onChange={(e) => setValues((v) => ({ ...v, [field]: e.target.value }))}
                 placeholder={site ? "出于安全，请重新填写" : ""}
-                autoComplete="off"
+                // Chrome 对 password 字段会无视 "off" 仍弹出已存密码，须用 "new-password" 抑制
+                autoComplete={fm.kind === "password" ? "new-password" : "off"}
                 className="w-full rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-[13px] text-[var(--text)] outline-none focus:border-[var(--accent)]/60"
               />
             )}

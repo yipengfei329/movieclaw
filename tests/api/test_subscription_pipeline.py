@@ -1,5 +1,6 @@
 """P4 管线的服务级测试：水位被动匹配、拒绝记录、整季包选优、认领竞态、
-搜索退避、元数据刷新生长。全程 dry-run 投递（默认配置）。
+搜索退避、元数据刷新生长。全程 dry-run 投递（fixture 显式开启——真投递
+默认已启用，这里只测匹配与状态机，不连站点与下载器）。
 
 夹具剧集同 test_subscription_service：S1 两集已播；S2 = E1 昨播/E2 十天后/E3 未定档。
 """
@@ -86,6 +87,8 @@ def _fake_tmdb(routes: dict) -> TmdbClient:
 @pytest_asyncio.fixture
 async def db(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{tmp_path / 'pipe.db'}")
+    # 本文件只测匹配与状态机，显式开 dry-run 隔离站点/下载器依赖
+    monkeypatch.setenv("SUBSCRIPTION_DISPATCH_DRY_RUN", "true")
     get_settings.cache_clear()
     init_db(get_settings().database_url, echo=False)
     await run_migrations()
@@ -193,7 +196,7 @@ async def test_watermark_skips_history_then_follows_new_torrents(db) -> None:
 
 
 async def test_dispatch_derives_save_path_from_library(db) -> None:
-    """投递 save_path 由订阅目标库主根推导（{主根}/{标题} ({年份})），
+    """投递目录三级兜底之②：库无监听规则时回落库推导条目目录（原地入库），
     GRABBED 活动的 message 与 payload 都带完整路径——dry-run 同样可见（L1.3）。"""
     async with db.session() as session:
         lib = await LibraryRepository(session).create(
@@ -211,9 +214,11 @@ async def test_dispatch_derives_save_path_from_library(db) -> None:
     async with db.session() as session:
         grabbed = [a for a in await _activities(session, sub.id) if a.type == "grabbed"]
         assert len(grabbed) == 1
-        assert "下载完成后将入库到「剧集库」：/media/tv/测试剧集 (2024)" in grabbed[0].message
+        assert "将直接下载到「剧集库」库内目录：/media/tv/测试剧集 (2024)" in grabbed[0].message
         assert grabbed[0].payload["library_id"] == lib.id
         assert grabbed[0].payload["save_path"] == "/media/tv/测试剧集 (2024)"
+        # 无监听规则：实际投递目录就是条目目录，不再退下载器默认目录
+        assert grabbed[0].payload["dispatch_dir"] == "/media/tv/测试剧集 (2024)"
 
 
 async def test_subscription_rejects_kind_mismatched_library(db) -> None:

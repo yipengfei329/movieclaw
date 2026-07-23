@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { CheckIcon, ClockIcon, CopyIcon, ShieldIcon } from "@/components/icons";
+import { CheckIcon, ClockIcon, CopyIcon, DownloadIcon, PuzzleIcon, ShieldIcon } from "@/components/icons";
+import { EXTENSION_ZIP_URL, useExtensionInstalled } from "@/lib/extension-install";
 import {
   type ConfiguredSite,
   type SiteStatus,
@@ -24,7 +25,10 @@ const STATUS_META: Record<SiteStatus, { label: string; color: string }> = {
 
 /**
  * 「浏览器插件」设置分区：
- * - 上半部：同步令牌的生成 / 查看 / 复制 / 重新生成 / 关闭；
+ * - 顶部：MovieClaw 插件的安装引导——自动检测是否已安装（见 lib/extension-install.ts），
+ *   未安装时提供 zip 下载与加载步骤（Chrome 政策不允许商店外插件一键静默安装，
+ *   下载后需在 chrome://extensions 手动加载，页面把步骤讲清楚）；
+ * - 中部：同步令牌的生成 / 查看 / 复制 / 重新生成 / 关闭；
  * - 下半部：最近活动——插件同步管理的 cookie 站点及其验证状态与时间。
  */
 export function ExtensionSection() {
@@ -88,6 +92,9 @@ export function ExtensionSection() {
           {error}
         </div>
       )}
+
+      {/* —— 安装插件 —— */}
+      <InstallCard />
 
       {/* —— 同步令牌 —— */}
       <section className="css-glass !rounded-2xl p-6">
@@ -184,6 +191,89 @@ export function ExtensionSection() {
 }
 
 /* —— 子组件 —— */
+
+/**
+ * 安装引导卡：自动检测 MovieClaw 插件是否已安装。
+ * - 已安装：绿色徽标 + 一句使用指引，不再打扰；
+ * - 未安装：下载按钮 + 三步加载指引。Chrome 不允许网页静默安装商店外插件，
+ *   「下载 → 解压 → 加载」是自部署场景下最短的路径；装完切回本页自动变绿
+ *   （useExtensionInstalled 在窗口重获焦点时复测）。
+ */
+function InstallCard() {
+  const { installed } = useExtensionInstalled();
+
+  const badge =
+    installed === null
+      ? { label: "检测中…", color: "#c0c4cc" }
+      : installed
+        ? { label: "已安装", color: "#4ade80" }
+        : { label: "未检测到", color: "#c0c4cc" };
+
+  return (
+    <section className="css-glass !rounded-2xl p-6">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start gap-3.5">
+          <span className="icon-chip size-10 shrink-0 !rounded-xl">
+            <PuzzleIcon className="size-5" />
+          </span>
+          <div>
+            <h2 className="text-[15px] font-semibold">MovieClaw 浏览器插件</h2>
+            <p className="mt-0.5 text-xs leading-5 text-[var(--text-muted)]">
+              在站点页面一键读取登录 Cookie（含 httpOnly）并同步到本服务，免去手动复制粘贴，
+              还能随 Cookie 变化自动保持最新。
+            </p>
+          </div>
+        </div>
+        <span className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--text-muted)]">
+          <span
+            className={`size-2 rounded-full ${installed === null ? "animate-pulse" : ""}`}
+            style={{ background: badge.color }}
+          />
+          {badge.label}
+        </span>
+      </div>
+
+      {installed ? (
+        <p className="mt-4 rounded-xl bg-white/[0.03] px-4 py-3 text-sm text-[var(--text-muted)]">
+          <CheckIcon className="mr-1.5 inline size-4 text-[#4ade80]" />
+          插件已就绪。打开支持的站点页面，点击浏览器工具栏的 MovieClaw
+          图标即可同步该站 Cookie；令牌配置见下方。
+        </p>
+      ) : (
+        <>
+          <ol className="mt-4 space-y-2 rounded-xl bg-white/[0.03] px-4 py-3.5 text-[13px] leading-6 text-[var(--text-muted)]">
+            <li>
+              <b className="text-[var(--text)]">1.</b> 点击下方按钮下载插件包，解压得到{" "}
+              <code className="rounded bg-white/[0.06] px-1 font-mono text-xs">chrome-mv3</code> 文件夹。
+            </li>
+            <li>
+              <b className="text-[var(--text)]">2.</b> 浏览器打开{" "}
+              <code className="rounded bg-white/[0.06] px-1 font-mono text-xs">chrome://extensions</code>
+              ，右上角开启「开发者模式」。
+            </li>
+            <li>
+              <b className="text-[var(--text)]">3.</b>{" "}
+              点「加载已解压的扩展程序」选择该文件夹，切回本页即自动识别为「已安装」。
+            </li>
+          </ol>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <a
+              href={EXTENSION_ZIP_URL}
+              download
+              className="btn-accent flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-semibold"
+            >
+              <DownloadIcon className="size-4" />
+              下载插件包
+            </a>
+            <p className="text-[11px] text-[var(--text-faint)]">
+              支持 Chrome / Edge 等 Chromium 内核浏览器；安装检测同样仅对 Chromium 生效。
+            </p>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
 
 function StatusDot({ on }: { on: boolean }) {
   return (

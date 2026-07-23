@@ -19,6 +19,7 @@
     "web:typecheck": "pnpm --filter web exec tsc --noEmit",
     "ext:dev": "pnpm --filter extension dev",
     "ext:build": "pnpm --filter extension build",
-    "ext:zip": "pnpm --filter extension zip"
+    "ext:zip": "pnpm --filter extension zip",
+    "ext:publish": "pnpm ext:zip && mkdir -p apps/web/public/extension && cp \"$(ls -t apps/extension/.output/*-chrome.zip | head -1)\" apps/web/public/extension/movieclaw-extension.zip"
   }
 }

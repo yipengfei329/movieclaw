@@ -148,6 +148,239 @@ def test_submit_with_library_derives_save_path(client) -> None:
     assert r.json()["data"]["save_path"] == "/vol1/media/movies"
 
 
+def test_translate_save_path() -> None:
+    """路径映射翻译：最长前缀优先、分隔符边界安全、未命中原样放行。"""
+    from movieclaw_api.services.torrent_submit import translate_save_path
+
+    mappings = [
+        {"local": "/data", "remote": "/mnt/data"},
+        {"local": "/data/downloads", "remote": "/downloads"},
+    ]
+    # 最长前缀赢：/data/downloads 优先于 /data
+    assert translate_save_path("/data/downloads/watch", mappings) == "/downloads/watch"
+    # 恰好等于前缀本身
+    assert translate_save_path("/data/downloads", mappings) == "/downloads"
+    # 短前缀兜底
+    assert translate_save_path("/data/movies", mappings) == "/mnt/data/movies"
+    # 边界安全：/data/downloads2 不该被 /data/downloads 误配
+    assert translate_save_path("/data/downloads2/x", mappings) == "/mnt/data/downloads2/x"
+    # 未命中 / 无映射 / 无路径：原样放行
+    assert translate_save_path("/other/place", mappings) == "/other/place"
+    assert translate_save_path("/data/downloads", None) == "/data/downloads"
+    assert translate_save_path(None, mappings) is None
+    # 残缺映射行（单边为空）跳过不参与匹配
+    assert translate_save_path("/data/x", [{"local": "/data", "remote": ""}]) == "/data/x"
+
+
+def test_translate_to_local_and_mapping_covers() -> None:
+    """反向翻译（下载器视角 → movieclaw 视角）与覆盖判定。"""
+    from movieclaw_api.services.torrent_submit import mapping_covers, translate_to_local
+
+    mappings = [{"local": "/data/downloads", "remote": "/downloads"}]
+    assert translate_to_local("/downloads/watch", mappings) == "/data/downloads/watch"
+    assert translate_to_local("/downloads", mappings) == "/data/downloads"
+    # 未命中原样返回（视角一致部署）
+    assert translate_to_local("/other", mappings) == "/other"
+    assert mapping_covers("/data/downloads/movies", mappings) is True
+    assert mapping_covers("/vol1/media", mappings) is False
+
+
+def test_submit_with_path_mappings_translates_save_path(client) -> None:
+    """配了路径映射：发给下载器的目录是下载器视角，接口回显同款。"""
+    _add_default_downloader(
+        client,
+        save_path="/data/downloads/movies",
+        path_mappings=[{"local": "/data/downloads", "remote": "/downloads"}],
+    )
+    r = client.post("/api/v1/downloaders/submit", json=_SUBMIT)
+    assert r.status_code == 200
+    assert r.json()["data"]["save_path"] == "/downloads/movies"
+    assert _captured_requests[-1].save_path == "/downloads/movies"
+
+    # 守门：库推导路径不被任何映射覆盖 → 拒绝提交（下载器大概率无法访问，
+    # 投出去会落进容器黑洞），错误信息给出可操作指引
+    lib = client.post(
+        "/api/v1/libraries",
+        json={"name": "电影库3", "kind": "movie", "root_paths": ["/vol1/media/movies"]},
+    ).json()["data"]
+    r = client.post(
+        "/api/v1/downloaders/submit",
+        json={
+            **_SUBMIT,
+            "download_url": "https://example.org/dl?id=3",
+            "library_id": lib["id"],
+            "title": "沙丘",
+            "year": 2021,
+        },
+    )
+    assert r.status_code == 400
+    assert "路径映射覆盖范围" in r.json()["message"]
+    # 补一条覆盖库根的等价映射（下载器可直达同名路径的声明）后放行
+    downloaders = client.get("/api/v1/downloaders").json()["data"]
+    client.put(
+        f"/api/v1/downloaders/{downloaders[0]['id']}",
+        json={
+            "name": downloaders[0]["name"],
+            "client_type": downloaders[0]["client_type"],
+            "url": downloaders[0]["url"],
+            "save_path": downloaders[0]["save_path"],
+            "path_mappings": [
+                {"local": "/data/downloads", "remote": "/downloads"},
+                {"local": "/vol1/media", "remote": "/vol1/media"},
+            ],
+        },
+    )
+    r = client.post(
+        "/api/v1/downloaders/submit",
+        json={
+            **_SUBMIT,
+            "download_url": "https://example.org/dl?id=3",
+            "library_id": lib["id"],
+            "title": "沙丘",
+            "year": 2021,
+        },
+    )
+    assert r.status_code == 200
+    assert _captured_requests[-1].save_path == "/vol1/media/movies/沙丘 (2021)"
+
+
+def test_downloader_payload_rejects_relative_mapping(client) -> None:
+    """路径映射两端必须是绝对路径，相对路径 422。"""
+    r = client.post(
+        "/api/v1/downloaders",
+        json={
+            "name": "坏映射",
+            "client_type": "qbittorrent",
+            "url": "http://192.168.1.10:8080",
+            "path_mappings": [{"local": "data/downloads", "remote": "/downloads"}],
+        },
+    )
+    assert r.status_code == 422
+
+
+def test_submit_with_manual_save_path_override(client) -> None:
+    """下载弹窗手选目录：优先于库推导，照常过映射翻译；相对路径 422。"""
+    _add_default_downloader(
+        client,
+        path_mappings=[{"local": "/data/downloads", "remote": "/downloads"}],
+    )
+    r = client.post(
+        "/api/v1/downloaders/submit",
+        json={**_SUBMIT, "save_path": "/data/downloads/manual/"},
+    )
+    assert r.status_code == 200
+    # 尾斜杠归一 + 映射翻译成下载器视角
+    assert _captured_requests[-1].save_path == "/downloads/manual"
+    assert r.json()["data"]["save_path"] == "/downloads/manual"
+
+    r = client.post(
+        "/api/v1/downloaders/submit",
+        json={**_SUBMIT, "download_url": "https://example.org/dl?id=9", "save_path": "relative/x"},
+    )
+    assert r.status_code == 422
+
+
+def test_dispatch_preview_routes_and_warnings(client) -> None:
+    """投递路由预检：与真实投递同源的三级兜底 + 映射守门判定。"""
+    # 没有任何下载器：不 ok，指引先配下载器
+    lib = client.post(
+        "/api/v1/libraries",
+        json={"name": "预检电影库", "kind": "movie", "root_paths": ["/vol1/media/movies"]},
+    ).json()["data"]
+    r = client.get("/api/v1/subscriptions/dispatch-preview", params={"kind": "movie"})
+    assert r.status_code == 200
+    assert r.json()["data"]["ok"] is False
+    assert "默认下载器" in r.json()["data"]["warning"]
+
+    # 有下载器 + 库无监听规则：inplace 模式，基底 = 库主根
+    _add_default_downloader(client)
+    r = client.get(
+        "/api/v1/subscriptions/dispatch-preview",
+        params={"kind": "movie", "library_id": lib["id"]},
+    )
+    data = r.json()["data"]
+    assert data["ok"] is True
+    assert data["mode"] == "inplace"
+    assert data["path"] == "/vol1/media/movies"
+    assert data["library_name"] == "预检电影库"
+
+    # 下载器配了映射但不覆盖库根：不 ok，警示映射缺口
+    downloaders = client.get("/api/v1/downloaders").json()["data"]
+    client.put(
+        f"/api/v1/downloaders/{downloaders[0]['id']}",
+        json={
+            "name": downloaders[0]["name"],
+            "client_type": downloaders[0]["client_type"],
+            "url": downloaders[0]["url"],
+            "path_mappings": [{"local": "/data/downloads", "remote": "/downloads"}],
+        },
+    )
+    r = client.get(
+        "/api/v1/subscriptions/dispatch-preview",
+        params={"kind": "movie", "library_id": lib["id"]},
+    )
+    data = r.json()["data"]
+    assert data["ok"] is False
+    assert "路径映射覆盖范围" in data["warning"]
+
+    # 配上监听导入规则：watch 模式，基底 = 规则源目录（映射覆盖到位则 ok）
+    client.put(
+        f"/api/v1/downloaders/{downloaders[0]['id']}",
+        json={
+            "name": downloaders[0]["name"],
+            "client_type": downloaders[0]["client_type"],
+            "url": downloaders[0]["url"],
+            "path_mappings": [{"local": "/data/downloads", "remote": "/downloads"}],
+        },
+    )
+    r = client.post(
+        "/api/v1/import-watch",
+        json={
+            "source_path": "/data/downloads/watch",
+            "strategy": "copy",
+            "library_id": lib["id"],
+        },
+    )
+    assert r.status_code == 200, r.json()
+    r = client.get(
+        "/api/v1/subscriptions/dispatch-preview",
+        params={"kind": "movie", "library_id": lib["id"]},
+    )
+    data = r.json()["data"]
+    assert data["ok"] is True
+    assert data["mode"] == "watch"
+    assert data["path"] == "/data/downloads/watch"
+
+
+def test_downloader_payload_rejects_duplicate_mapping(client) -> None:
+    """映射两端各自不允许重复（尾斜杠归一后比较），重复 422。"""
+    base = {"name": "重复映射", "client_type": "qbittorrent", "url": "http://192.168.1.10:8080"}
+    # movieclaw 路径重复（/data/ 与 /data 视为同一个）
+    r = client.post(
+        "/api/v1/downloaders",
+        json={
+            **base,
+            "path_mappings": [
+                {"local": "/data/", "remote": "/downloads"},
+                {"local": "/data", "remote": "/mnt/other"},
+            ],
+        },
+    )
+    assert r.status_code == 422
+    # 下载器路径重复
+    r = client.post(
+        "/api/v1/downloaders",
+        json={
+            **base,
+            "path_mappings": [
+                {"local": "/data/a", "remote": "/downloads"},
+                {"local": "/data/b", "remote": "/downloads"},
+            ],
+        },
+    )
+    assert r.status_code == 422
+
+
 def test_submit_duplicate_is_idempotent(client) -> None:
     _add_default_downloader(client)
     r = client.post(

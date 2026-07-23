@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 
+from sqlalchemy import JSON, Column
 from sqlmodel import Field
 
 from movieclaw_db.models.base import TimestampMixin
@@ -44,8 +45,19 @@ class DownloaderClient(TimestampMixin, table=True):
     url: str = Field(description="下载器地址，如 http://192.168.1.10:8080")
     username: str | None = Field(default=None, description="登录用户名（未开鉴权可留空）")
     password: str | None = Field(default=None, description="登录密码（SecretBox 加密密文）")
-    # 提交下载时的默认保存目录；None 表示使用下载器自己的默认目录
-    save_path: str | None = Field(default=None, description="默认保存目录")
+    # 提交下载时的默认保存目录；None 表示使用下载器自己的默认目录。
+    # movieclaw 视角的路径（界面上弹窗选择），提交前经 path_mappings 翻译
+    save_path: str | None = Field(default=None, description="默认保存目录（movieclaw 视角）")
+
+    # 路径映射：movieclaw 与下载器不在同一容器/主机、同一块盘两边路径不同时，
+    # 声明挂载对照 [{"local": "/data/downloads", "remote": "/downloads"}]。
+    # 提交下载前按最长前缀把 movieclaw 视角的保存目录翻译成下载器视角；
+    # None/空 = 两边视角一致，路径原样提交（绝大多数直装部署）
+    path_mappings: list[dict[str, str]] | None = Field(
+        default=None,
+        sa_column=Column(JSON, nullable=True),
+        description="路径映射（movieclaw 路径 → 下载器路径）",
+    )
 
     # 是否启用；停用后不出现在"提交下载"的可选目标里，但保留配置便于恢复
     enabled: bool = Field(default=True, description="用户启用开关")

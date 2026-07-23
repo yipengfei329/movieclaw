@@ -109,7 +109,12 @@ class Settings(BaseSettings):
     # 模拟投递开关（默认开）：匹配管线走完整状态机（认领→grabbed、活动照记），
     # 但不取种、不碰下载器，只打完整中文日志。用于安全观察订阅管线行为；
     # 确认无误后置 false 切换真实投递，代码路径不变。
-    subscription_dispatch_dry_run: bool = Field(default=True, alias="SUBSCRIPTION_DISPATCH_DRY_RUN")
+    # 订阅模拟投递开关：true 时投递短路为纯日志（不取种、不提交下载器），
+    # 状态机照常推进，供调试匹配规则用。真实投递链路（取种 → 路径映射翻译 →
+    # 提交默认下载器）已闭环，默认关闭
+    subscription_dispatch_dry_run: bool = Field(
+        default=False, alias="SUBSCRIPTION_DISPATCH_DRY_RUN"
+    )
 
     # ------------------------------------------------------------------
     # TMDB 影视元数据（发现页数据源）

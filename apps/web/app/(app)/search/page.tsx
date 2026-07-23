@@ -16,6 +16,7 @@ import {
 } from "@/lib/categories";
 import { useSearchPrefs } from "@/lib/search-prefs";
 import { buildSearchPath, parseSearchQuery } from "@/lib/search-url";
+import { usePageTitle } from "@/lib/use-page-title";
 
 /**
  * 搜索结果页（/search?q=…）：查询全部输入都在 URL 里，可刷新 / 分享 / 前进后退。
@@ -46,6 +47,7 @@ export default function SearchPage() {
     () => parseSearchQuery(new URLSearchParams(torrentKey)),
     [torrentKey],
   );
+  usePageTitle(query ? `搜索“${query.keyword}”` : null);
 
   if (!query) {
     if (typeof window !== "undefined") router.replace("/");

@@ -14,8 +14,10 @@ import {
   type TorrentAttrs,
   type TorrentHit,
 } from "@/lib/api/search";
-import { submitTorrentDownload } from "@/lib/api/downloaders";
-import { defaultLibraryFor } from "@/lib/api/libraries";
+import {
+  DownloadTargetDialog,
+  type DownloadTargetRequest,
+} from "@/components/download-target-dialog";
 import { cachedImageUrl } from "@/lib/image-proxy";
 import { formatDateTime, formatRelativeTime } from "@/lib/time";
 
@@ -1673,65 +1675,59 @@ const DOWNLOAD_LABEL: Record<DownloadState, string> = {
 };
 
 /**
- * 下载按钮：把该种子提交到默认下载器。后端带站点登录态取回 .torrent。
- * 种子解析出了实体身份（类型+片名+年份）时，保存目录改为该类型**默认媒体库**
- * 的规范路径（主根/标题 (年份)）——文件落盘后媒体库的实时监控会自动识别入账；
- * 没有可靠身份则维持旧行为（下载器默认目录），不拿猜测污染库目录。
- * 结果就地反馈在按钮文字上，不弹窗打断浏览；失败可悬停看原因、点击重试。
+ * 下载按钮：点击先弹「选择保存位置」（download-target-dialog），用户确认
+ * 文件落点后由弹窗提交到默认下载器（后端带站点登录态取回 .torrent）。
+ * 种子解析出实体身份（类型+片名+年份）时，弹窗提供"智能入库"选项
+ * （与订阅同源的三级兜底 + 预检警示）；同时列出下载器已配置目录双视角
+ * 供手选。提交结果回填在按钮文字上；失败可悬停看原因、点击重试。
  */
 function DownloadButton({ hit, className }: { hit: TorrentHit; className: string }) {
   const [state, setState] = useState<DownloadState>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [request, setRequest] = useState<DownloadTargetRequest | null>(null);
   if (!hit.download_url) return null;
 
   const settled = state === "done" || state === "exists";
 
-  async function submit(e: React.MouseEvent) {
+  function openDialog(e: React.MouseEvent) {
     e.stopPropagation();
     if (state === "submitting" || settled || !hit.download_url) return;
-    setState("submitting");
     setError(null);
-    try {
-      // 实体身份三件套齐全才入库（年份是防错挂的硬门槛）
-      const attrs = hit.attrs;
-      const title = attrs?.titles_zh?.[0] ?? attrs?.titles_en?.[0];
-      const mediaType =
-        attrs?.media_type === "movie" || attrs?.media_type === "tv"
-          ? attrs.media_type
-          : null;
-      const library =
-        title && attrs?.year != null ? await defaultLibraryFor(mediaType) : null;
-      const result = await submitTorrentDownload({
-        site_id: hit.site_id,
-        download_url: hit.download_url,
-        ...(library && title
-          ? {
-              library_id: library.id,
-              title,
-              year: attrs?.year ?? null,
-              subtitle: hit.subtitle || null,
-            }
-          : {}),
-      });
-      setState(result.already_exists ? "exists" : "done");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "提交失败，请重试");
-      setState("error");
-    }
+    // 实体身份三件套齐全才提供"智能入库"选项（年份是防错挂的硬门槛）
+    const attrs = hit.attrs;
+    const title = attrs?.titles_zh?.[0] ?? attrs?.titles_en?.[0];
+    const mediaType =
+      attrs?.media_type === "movie" || attrs?.media_type === "tv" ? attrs.media_type : null;
+    setRequest({
+      site_id: hit.site_id,
+      download_url: hit.download_url,
+      identity:
+        mediaType && title && attrs?.year != null
+          ? { kind: mediaType, title, year: attrs.year }
+          : null,
+      subtitle: hit.subtitle || null,
+    });
   }
 
   return (
-    <button
-      type="button"
-      onClick={submit}
-      disabled={state === "submitting"}
-      title={error ?? undefined}
-      className={`${className}${settled ? " cursor-default opacity-75" : ""}${
-        state === "submitting" ? " cursor-wait opacity-75" : ""
-      }`}
-    >
-      {DOWNLOAD_LABEL[state]}
-    </button>
+    <>
+      <button
+        type="button"
+        onClick={openDialog}
+        disabled={state === "submitting"}
+        title={error ?? undefined}
+        className={`${className}${settled ? " cursor-default opacity-75" : ""}${
+          state === "submitting" ? " cursor-wait opacity-75" : ""
+        }`}
+      >
+        {DOWNLOAD_LABEL[state]}
+      </button>
+      <DownloadTargetDialog
+        request={request}
+        onClose={() => setRequest(null)}
+        onSubmitted={(result) => setState(result.already_exists ? "exists" : "done")}
+      />
+    </>
   );
 }
 

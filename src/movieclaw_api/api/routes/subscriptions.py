@@ -7,6 +7,7 @@ from movieclaw_api.exceptions import BadRequestException
 from movieclaw_api.schemas.response import ApiResponse, ok
 from movieclaw_api.schemas.subscription import (
     ActivityView,
+    DispatchPreviewView,
     MediaBrief,
     PreparePayload,
     PrepareView,
@@ -118,6 +119,24 @@ async def create_subscription(
         SubscriptionDetailView.from_detail(sub, item, wanted),
         message="已加入订阅，正在搜索资源",
     )
+
+
+@router.get(
+    "/dispatch-preview",
+    response_model=ApiResponse[DispatchPreviewView],
+    summary="投递路由预检：按类型与目标库预演下载会落到哪、能否自动入库",
+)
+async def dispatch_preview(
+    kind: str = Query(description="movie / tv"),
+    library_id: int | None = Query(default=None, description="目标库；缺省该类型默认库"),
+    session: AsyncSession = Depends(get_session),
+) -> ApiResponse[DispatchPreviewView]:
+    """订阅弹窗选库时调用：与真实投递同源的三级兜底 + 映射守门判定，
+    配置有问题（映射不覆盖/无下载器/无库根）在订阅那一刻就亮出来。"""
+    from movieclaw_api.services.download_dispatch import preview_dispatch_route
+
+    preview = await preview_dispatch_route(session, kind=kind, library_id=library_id)
+    return ok(DispatchPreviewView(**preview))
 
 
 @router.get(

@@ -6,7 +6,9 @@ import { createPortal } from "react-dom";
 import type { Route } from "next";
 import Link from "next/link";
 
-import { ChevronLeftIcon, XIcon } from "@/components/icons";
+import { XIcon } from "@/components/icons";
+import { Breadcrumb } from "@/components/breadcrumb";
+import { usePageTitle } from "@/lib/use-page-title";
 import {
   LIBRARY_KIND_META,
   LibraryFormDialog,
@@ -86,14 +88,19 @@ export function LibraryDetailView({ libraryId }: { libraryId: number }) {
   }, [reload]);
 
   const library = libraries?.find((l) => l.id === libraryId) ?? null;
+  usePageTitle(library?.name);
 
   // 扫描/整理期间轮询，结束自动展示最新库存与文件名
   const busy = Boolean(library?.scanning || library?.organizing);
+  // 写入中暂缓入账的文件数（watchdog 已发现、等拷贝/下载落定后自动补扫入库）
+  const importing = busy ? 0 : (library?.last_scan?.deferred ?? 0);
   useEffect(() => {
-    if (!busy) return;
-    const timer = setInterval(reload, 3000);
+    // 忙时快轮询；有文件入库中中速跟进补扫结果；空闲低频兜底——后台自发
+    // 的扫描（实时监控/定时对账）页面开着不动也能感知到
+    const interval = busy ? 3000 : importing > 0 ? 10_000 : 30_000;
+    const timer = setInterval(reload, interval);
     return () => clearInterval(timer);
-  }, [busy, reload]);
+  }, [busy, importing, reload]);
 
   // 追踪中：目标是本库、且尚未在库存中出现的订阅
   const pending = useMemo(() => {
@@ -149,13 +156,8 @@ export function LibraryDetailView({ libraryId }: { libraryId: number }) {
     <div className="scroll-thin flex-1 overflow-y-auto pb-10">
       {/* —— 库头部 —— */}
       <div className="px-6 pt-2">
-        <Link
-          href={"/library" as Route}
-          className="text-on-image inline-flex items-center gap-1 text-[12.5px] font-medium text-[var(--text-muted)] transition hover:text-white"
-        >
-          <ChevronLeftIcon className="size-4" />
-          媒体库
-        </Link>
+        {/* 面包屑：媒体库 › 库名 */}
+        <Breadcrumb items={[{ label: "媒体库", href: "/library" }, { label: library.name }]} />
         <div className="mt-2 flex items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2.5">
@@ -196,8 +198,14 @@ export function LibraryDetailView({ libraryId }: { libraryId: number }) {
               </p>
             )}
             {/* —— 健康状态胶囊：工单收进抽屉，海报墙保持干净 —— */}
-            {(missing.length > 0 || unidentified.length > 0) && (
+            {(missing.length > 0 || unidentified.length > 0 || importing > 0) && (
               <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                {importing > 0 && (
+                  <span className="flex items-center gap-1.5 rounded-full border border-[#7dd3fc]/35 bg-[#7dd3fc]/[0.12] px-3 py-1 text-[12px] font-semibold text-[#7dd3fc]">
+                    <span className="size-1.5 animate-pulse rounded-full bg-[#7dd3fc]" />
+                    已发现 {importing} 个新文件 · 写入完成后自动入库
+                  </span>
+                )}
                 {missing.length > 0 && (
                   <button
                     type="button"

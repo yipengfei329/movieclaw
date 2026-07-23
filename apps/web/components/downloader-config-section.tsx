@@ -4,13 +4,15 @@ import { useCallback, useEffect, useState } from "react";
 
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 
-import { DownloadIcon, MoreIcon, PlusIcon } from "@/components/icons";
+import { DirectoryPicker } from "@/components/directory-picker";
+import { DownloadIcon, FolderIcon, MoreIcon, PlusIcon, XIcon } from "@/components/icons";
 import { useBackdrop } from "@/lib/backdrop";
 import {
   type ConfiguredDownloader,
   type DownloaderClientType,
   type DownloaderPayload,
   type DownloaderStatus,
+  type PathMapping,
   createDownloader,
   deleteDownloader,
   listDownloaders,
@@ -316,11 +318,17 @@ function DownloaderCard({
         </div>
       </div>
 
-      {/* 连接信息带：地址与默认保存目录，一眼可核对 */}
+      {/* 连接信息带：地址、默认保存目录与路径映射，一眼可核对 */}
       <div className="flex flex-wrap gap-x-7 gap-y-2 border-t border-white/[0.06] px-4 py-3">
         <InfoStat label="地址" value={downloader.url} />
         {downloader.username && <InfoStat label="用户名" value={downloader.username} />}
         <InfoStat label="默认保存目录" value={downloader.save_path ?? "下载器默认"} />
+        {(downloader.path_mappings?.length ?? 0) > 0 && (
+          <InfoStat
+            label="路径映射"
+            value={downloader.path_mappings!.map((m) => `${m.local} → ${m.remote}`).join("；")}
+          />
+        )}
       </div>
 
       {/* 展开态：编辑表单 */}
@@ -448,8 +456,30 @@ function DownloaderForm({ downloader, onSubmit, onCancel, onError }: DownloaderF
   // 出于安全后端不回传密码，编辑时留空需重新填写（未开鉴权则保持留空）
   const [password, setPassword] = useState("");
   const [savePath, setSavePath] = useState(downloader?.save_path ?? "");
+  // 路径映射：跨容器部署时 movieclaw 与下载器看同一块盘的两个名字
+  const [mappings, setMappings] = useState<PathMapping[]>(downloader?.path_mappings ?? []);
+  // 已有映射的编辑态默认展开，否则折叠（绝大多数部署用不到）
+  const [mappingsOpen, setMappingsOpen] = useState((downloader?.path_mappings?.length ?? 0) > 0);
+  // 目录弹窗当前服务的字段："save" = 默认保存目录，数字 = 第 N 条映射的左列
+  const [pickerTarget, setPickerTarget] = useState<"save" | number | null>(null);
 
-  const canSubmit = name.trim().length > 0 && /^https?:\/\/.+/.test(url.trim());
+  // 映射行要么删掉要么填完整：下载器侧必须是绝对路径
+  const mappingsComplete = mappings.every(
+    (m) => m.local.trim().length > 0 && m.remote.trim().startsWith("/"),
+  );
+  // 两端各自查重（尾部斜杠归一后比较）：同一 movieclaw 路径两条映射翻译结果
+  // 看遍历顺序，两条映射指向同一下载器路径同样是错配
+  const normPath = (p: string) => p.trim().replace(/\/+$/, "") || "/";
+  const localPaths = mappings.map((m) => normPath(m.local)).filter((p) => p !== "/");
+  const remotePaths = mappings.map((m) => normPath(m.remote)).filter((p) => p !== "/");
+  const mappingsUnique =
+    new Set(localPaths).size === localPaths.length &&
+    new Set(remotePaths).size === remotePaths.length;
+  const canSubmit =
+    name.trim().length > 0 &&
+    /^https?:\/\/.+/.test(url.trim()) &&
+    mappingsComplete &&
+    mappingsUnique;
 
   function submit() {
     setBusy(true);
@@ -460,10 +490,17 @@ function DownloaderForm({ downloader, onSubmit, onCancel, onError }: DownloaderF
       username: username.trim() || null,
       password: password || null,
       save_path: savePath.trim() || null,
+      path_mappings: mappings.length
+        ? mappings.map((m) => ({ local: m.local.trim(), remote: m.remote.trim() }))
+        : null,
       enabled: downloader?.enabled ?? true,
     })
       .catch((e) => onError((e as Error).message))
       .finally(() => setBusy(false));
+  }
+
+  function setMapping(index: number, patch: Partial<PathMapping>) {
+    setMappings((prev) => prev.map((m, i) => (i === index ? { ...m, ...patch } : m)));
   }
 
   const inputClass =
@@ -544,18 +581,123 @@ function DownloaderForm({ downloader, onSubmit, onCancel, onError }: DownloaderF
 
       <div>
         <label className={labelClass}>默认保存目录（可选）</label>
-        <input
-          type="text"
-          value={savePath}
-          onChange={(e) => setSavePath(e.target.value)}
-          placeholder="如：/vol1/media/movies"
-          autoComplete="off"
-          className={inputClass}
-        />
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setPickerTarget("save")}
+            className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-left transition-colors hover:border-[var(--accent)]/50"
+          >
+            <FolderIcon className="size-4 shrink-0 text-[var(--accent)]/80" />
+            {savePath ? (
+              <span dir="rtl" className="min-w-0 flex-1 truncate font-mono text-[13px] text-[var(--text)]">
+                {"‎" + savePath + "‎"}
+              </span>
+            ) : (
+              <span className="text-[13px] text-[var(--text-faint)]">浏览服务器目录并选择…</span>
+            )}
+          </button>
+          {savePath && (
+            <button
+              type="button"
+              onClick={() => setSavePath("")}
+              aria-label="清除默认保存目录"
+              className="glass-row !w-auto shrink-0 p-2"
+            >
+              <XIcon className="size-4" />
+            </button>
+          )}
+        </div>
         <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--text-faint)]">
-          提交下载时文件的保存位置，填<strong className="font-medium text-[var(--text-muted)]">下载器所在机器</strong>上的路径。
-          留空则使用下载器自己设置的默认下载目录（如 qBittorrent WebUI 里的「默认保存路径」）。
+          提交下载时文件的保存位置，从 movieclaw 能看到的目录里选择；下载器看到的路径不同时，
+          配合下方「路径映射」翻译。留空则使用下载器自己设置的默认下载目录
+          ——下载器与 movieclaw 没有共享目录的部署请留空。
         </p>
+      </div>
+
+      {/* 路径映射：默认折叠，仅跨容器/跨主机部署需要展开配置 */}
+      <div>
+        <button
+          type="button"
+          onClick={() => setMappingsOpen((v) => !v)}
+          className="flex items-center gap-1.5 text-xs font-medium text-[var(--text-muted)] transition-colors hover:text-[var(--text)]"
+        >
+          <span
+            className="inline-block transition-transform"
+            style={{ transform: mappingsOpen ? "rotate(90deg)" : undefined }}
+          >
+            ›
+          </span>
+          路径映射（可选）
+          {!mappingsOpen && mappings.length > 0 && (
+            <span className="text-[var(--text-faint)]">已配置 {mappings.length} 条</span>
+          )}
+        </button>
+        {mappingsOpen && (
+          <div className="mt-2.5 space-y-2.5">
+            <p className="text-[11px] leading-relaxed text-[var(--text-faint)]">
+              movieclaw 与下载器不在同一容器/主机、同一块盘两边路径不同时才需要：
+              提交下载前会把保存目录按前缀翻译成下载器视角。例如 movieclaw 看到的下载区是
+              <code className="mx-0.5 font-mono">/data/downloads</code>、下载器容器里是
+              <code className="mx-0.5 font-mono">/downloads</code>，则添加一条对照。留空表示两边路径一致。
+              注意：配了映射后，所有下载保存目录（含媒体库目录）都必须被某条映射覆盖，
+              否则会拒绝投递以防下载进下载器容器内的孤立路径；下载器能以相同路径直达的目录，
+              添加一条两边相同的映射即可。
+            </p>
+            {mappings.map((mapping, index) => (
+              <div key={index} className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPickerTarget(index)}
+                  title="movieclaw 上的路径（浏览选择）"
+                  className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-left transition-colors hover:border-[var(--accent)]/50"
+                >
+                  <FolderIcon className="size-4 shrink-0 text-[var(--accent)]/80" />
+                  {mapping.local ? (
+                    <span dir="rtl" className="min-w-0 flex-1 truncate font-mono text-[13px] text-[var(--text)]">
+                      {"‎" + mapping.local + "‎"}
+                    </span>
+                  ) : (
+                    <span className="truncate text-[13px] text-[var(--text-faint)]">movieclaw 上的路径…</span>
+                  )}
+                </button>
+                <span className="shrink-0 text-[var(--text-faint)]">→</span>
+                <input
+                  type="text"
+                  value={mapping.remote}
+                  onChange={(e) => setMapping(index, { remote: e.target.value })}
+                  placeholder="下载器上的路径，如 /downloads"
+                  autoComplete="off"
+                  className={`${inputClass} flex-1 font-mono`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setMappings((prev) => prev.filter((_, i) => i !== index))}
+                  aria-label="删除这条映射"
+                  className="glass-row !w-auto shrink-0 p-2"
+                >
+                  <XIcon className="size-4" />
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => setMappings((prev) => [...prev, { local: "", remote: "" }])}
+              className="btn-glass flex items-center gap-1 px-3 py-1.5 text-xs font-medium"
+            >
+              <PlusIcon className="size-3.5" />
+              添加映射
+            </button>
+            {!mappingsComplete ? (
+              <p className="text-[11px] text-[#ffb46b]">
+                每条映射两边都要填：左边浏览选择，右边填下载器上以 / 开头的绝对路径；不需要的行请删除。
+              </p>
+            ) : !mappingsUnique ? (
+              <p className="text-[11px] text-[#ffb46b]">
+                映射的路径不能重复：同一 movieclaw 路径或同一下载器路径只能出现一次，请修改或删除重复的行。
+              </p>
+            ) : null}
+          </div>
+        )}
       </div>
 
       <div className="flex items-center justify-end gap-3 pt-1">
@@ -571,6 +713,23 @@ function DownloaderForm({ downloader, onSubmit, onCancel, onError }: DownloaderF
           {busy ? "保存中…" : "保存并测试连接"}
         </button>
       </div>
+
+      <DirectoryPicker
+        open={pickerTarget !== null}
+        initialPath={
+          pickerTarget === "save"
+            ? savePath || undefined
+            : typeof pickerTarget === "number"
+              ? mappings[pickerTarget]?.local || undefined
+              : undefined
+        }
+        onClose={() => setPickerTarget(null)}
+        onSelect={(path) => {
+          if (pickerTarget === "save") setSavePath(path);
+          else if (typeof pickerTarget === "number") setMapping(pickerTarget, { local: path });
+          setPickerTarget(null);
+        }}
+      />
     </div>
   );
 }

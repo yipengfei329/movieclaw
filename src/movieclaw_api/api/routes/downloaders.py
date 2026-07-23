@@ -16,10 +16,17 @@ from movieclaw_api.services.downloader_config import (
     verify_downloader,
 )
 from movieclaw_api.services.library_config import LibraryConfigService, derive_save_path
-from movieclaw_api.services.torrent_submit import submit_torrent
+from movieclaw_api.services.torrent_submit import submit_torrent, translate_save_path
 from movieclaw_db.engine import get_session
 
 router = APIRouter(prefix="/downloaders", tags=["downloaders"])
+
+
+def _mappings_to_rows(payload: DownloaderPayload) -> list[dict[str, str]] | None:
+    """把请求体里的路径映射转成落库的字典列表（校验已在 schema 完成）。"""
+    if payload.path_mappings is None:
+        return None
+    return [m.model_dump() for m in payload.path_mappings]
 
 
 @router.post(
@@ -33,10 +40,10 @@ async def submit_download(
 ) -> ApiResponse[DownloadSubmitView]:
     """手动下载：带站点登录态取回 .torrent → 提交给默认下载器。
 
-    保存目录取值（与订阅同一决策）：选了库且库有监听导入规则 → 规则源
-    目录（完成后监听导入接管、规范命名进库）；选库无规则 → 库推导路径
-    （主根/标题 (年份)，直接下载进库原地收纳——扫描的完整性检测保证
-    半成品不入账）；未选库 → 下载器默认目录。
+    保存目录取值：用户在下载弹窗手选的目录最优先；否则与订阅同一决策——
+    选了库且库有监听导入规则 → 规则源目录（完成后监听导入接管、规范命名
+    进库）；选库无规则 → 库推导路径（主根/标题 (年份)，直接下载进库原地
+    收纳——扫描的完整性检测保证半成品不入账）；未选库 → 下载器默认目录。
     提交幂等：种子已在下载器中不视为错误，data.already_exists=true。
     """
     from movieclaw_api.services.import_watch_config import resolve_dispatch_dir
@@ -44,7 +51,11 @@ async def submit_download(
     library = None
     derived_path = None
     entry_level = False  # 条目级目录才允许锚下载线索
-    if payload.library_id is not None:
+    if payload.save_path is not None:
+        # 用户在下载弹窗里手选了目录：完全尊重（映射守门仍在 submit_torrent）；
+        # 手选目录不是条目级，不锚下载线索
+        derived_path = payload.save_path
+    elif payload.library_id is not None:
         library = await LibraryConfigService(session).get(payload.library_id)
         rule_dir = await resolve_dispatch_dir(session, library.id)
         if rule_dir is not None:
@@ -71,7 +82,9 @@ async def submit_download(
         already_exists=result.already_exists,
         downloader_id=row.id,
         downloader_name=row.name,
-        save_path=derived_path or row.save_path,
+        # 回显下载器视角的实际保存目录（有路径映射时与本地视角不同），
+        # 跨容器部署配错映射能在提交结果里第一时间看出来
+        save_path=translate_save_path(derived_path or row.save_path, row.path_mappings),
     )
     if result.already_exists:
         message = "该种子已在下载器中，未重复添加"
@@ -131,6 +144,7 @@ async def create_downloader_config(
         username=payload.username,
         password=payload.password,
         save_path=payload.save_path,
+        path_mappings=_mappings_to_rows(payload),
         enabled=payload.enabled,
     )
     assert row.id is not None  # 落库后必有主键
@@ -159,6 +173,7 @@ async def update_downloader_config(
         username=payload.username,
         password=payload.password,
         save_path=payload.save_path,
+        path_mappings=_mappings_to_rows(payload),
         enabled=payload.enabled,
     )
     row = await service.start_verification(downloader_id)

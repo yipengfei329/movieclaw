@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { DirectoryPicker } from "@/components/directory-picker";
 import { FolderIcon, PlusIcon, XIcon } from "@/components/icons";
+import { type ConfiguredDownloader, listDownloaders } from "@/lib/api/downloaders";
 import {
   type ImportWatchRule,
   createImportWatchRule,
@@ -12,6 +13,29 @@ import {
   updateImportWatchRule,
 } from "@/lib/api/import-watch";
 import { type MediaLibrary, listLibraries } from "@/lib/api/libraries";
+
+/** 下载器目录候选：源目录大概率就是下载器的某个目录，供表单一键填入。 */
+interface DownloaderDirOption {
+  /** movieclaw 视角的目录（默认保存目录或路径映射左列） */
+  path: string;
+  /** 来源下载器名称（chip 的 title 提示用） */
+  downloaderName: string;
+}
+
+/** 从下载器配置里收集 movieclaw 视角的目录候选（去重，保持配置顺序）。 */
+function collectDownloaderDirs(downloaders: ConfiguredDownloader[]): DownloaderDirOption[] {
+  const seen = new Set<string>();
+  const options: DownloaderDirOption[] = [];
+  for (const d of downloaders) {
+    const paths = [d.save_path, ...(d.path_mappings ?? []).map((m) => m.local)];
+    for (const path of paths) {
+      if (!path || seen.has(path)) continue;
+      seen.add(path);
+      options.push({ path, downloaderName: d.name });
+    }
+  }
+  return options;
+}
 
 /**
  * 监听导入配置（设置 → 监听导入）：媒体库之上的独立功能。
@@ -24,6 +48,7 @@ import { type MediaLibrary, listLibraries } from "@/lib/api/libraries";
 export function ImportWatchSection() {
   const [rules, setRules] = useState<ImportWatchRule[] | null>(null);
   const [libraries, setLibraries] = useState<MediaLibrary[]>([]);
+  const [downloaderDirs, setDownloaderDirs] = useState<DownloaderDirOption[]>([]);
   const [failed, setFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // 编辑态："new" = 新建 / 规则对象 = 编辑 / null = 关闭
@@ -37,6 +62,10 @@ export function ImportWatchSection() {
         setLibraries(libs);
       })
       .catch(() => setFailed(true));
+    // 下载器目录只是表单的快捷候选，拉取失败不影响主功能，静默降级为无候选
+    void listDownloaders()
+      .then((rows) => setDownloaderDirs(collectDownloaderDirs(rows)))
+      .catch(() => setDownloaderDirs([]));
   }, []);
 
   useEffect(() => {
@@ -132,6 +161,7 @@ export function ImportWatchSection() {
       <RuleFormDialog
         state={editing}
         libraries={libraries}
+        downloaderDirs={downloaderDirs}
         onClose={() => setEditing(null)}
         onSaved={() => {
           setEditing(null);
@@ -147,11 +177,14 @@ export function ImportWatchSection() {
 function RuleFormDialog({
   state,
   libraries,
+  downloaderDirs,
   onClose,
   onSaved,
 }: {
   state: ImportWatchRule | "new" | null;
   libraries: MediaLibrary[];
+  /** 下载器的本地目录候选：源目录大概率就是其中之一（或其子目录） */
+  downloaderDirs: DownloaderDirOption[];
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -237,8 +270,37 @@ function RuleFormDialog({
                 <span className="text-[13px] text-[var(--text-faint)]">浏览服务器目录并选择…</span>
               )}
             </button>
+            {/* 下载器目录快捷候选：源目录大概率就是下载器目录，点选直填；
+                想用其子目录（如 watch/）点选后再「浏览」，弹窗会从该目录起步 */}
+            {downloaderDirs.length > 0 && (
+              <div className="mt-2">
+                <p className="mb-1.5 text-[11px] text-[var(--text-faint)]">
+                  从下载器目录快速选择（选后可再浏览细化到子目录）：
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {downloaderDirs.map((option) => (
+                    <button
+                      key={option.path}
+                      type="button"
+                      onClick={() => setSourcePath(option.path)}
+                      data-active={sourcePath === option.path}
+                      title={`${option.path}（来自下载器「${option.downloaderName}」）`}
+                      className="glass-row nav-item !w-auto max-w-full gap-1.5 px-2.5 py-1.5 text-[12px] font-medium"
+                    >
+                      <FolderIcon className="size-3.5 shrink-0 text-[var(--accent)]/80" />
+                      <span dir="rtl" className="min-w-0 truncate font-mono">
+                        {"‎" + option.path + "‎"}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--text-faint)]">
               不能与任何媒体库的根路径重叠（库根下的内容由库自己扫描管理）。
+              订阅和手动下载会把种子投到这个目录（movieclaw 视角）；若下载器在另一个
+              容器/主机上、看到的路径不同，请先到「设置 → 下载器」配置路径映射，
+              否则会下载到错误位置。
             </p>
           </div>
 

@@ -107,11 +107,17 @@ export function LibraryView() {
 
   // 有库在扫描/整理时轮询刷新，任务完成即看到最新库存与文件名
   const busyAny = (libraries ?? []).some((l) => l.scanning || l.organizing);
+  // 有文件写入中暂缓入账（拷贝/下载进行时 watchdog 已发现，等补扫落定）：
+  // 中速轮询让「入库中」徽标与随后的库存变化自动呈现；完全空闲时低频兜底
+  // ——后台自发的扫描（实时监控/定时对账）页面开着不动也能感知到
+  const importingAny = (libraries ?? []).some(
+    (l) => !l.scanning && !l.organizing && (l.last_scan?.deferred ?? 0) > 0,
+  );
   useEffect(() => {
-    if (!busyAny) return;
-    const timer = setInterval(reload, 3000);
+    const interval = busyAny ? 3000 : importingAny ? 10_000 : 30_000;
+    const timer = setInterval(reload, interval);
     return () => clearInterval(timer);
-  }, [busyAny, reload]);
+  }, [busyAny, importingAny, reload]);
 
   // 每个非空库一行「最近添加」：按最近入账时间倒序取前 20，复用发现页的
   // 横滚海报行；悬浮动作按条目三分支（追新/补齐/已入库，见 libraryCardAction）
@@ -291,10 +297,10 @@ function LibraryCard({
     .filter((u): u is string => Boolean(u))
     .slice(0, 4);
   const { stats } = library;
-  const summary =
-    stats.item_count > 0
-      ? `${stats.item_count} 部作品 · ${formatBytes(stats.total_size_bytes)}`
-      : "暂无内容 · 扫描或订阅入库后展示";
+  // 写入中暂缓入账的文件数（watchdog 已发现、等拷贝/下载落定后自动补扫入库）；
+  // 扫描/整理进行中时已有各自的徽标，不重复展示
+  const importing =
+    library.scanning || library.organizing ? 0 : (library.last_scan?.deferred ?? 0);
 
   return (
     <div className="group/lib relative">
@@ -315,7 +321,7 @@ function LibraryCard({
         </div>
       </Link>
 
-      {/* 库名/徽标/统计：Emby 式放在封面下方居中，不再叠在海报上 */}
+      {/* 库名/徽标：Emby 式放在封面下方居中，不再叠在海报上 */}
       <div className="mt-2.5 px-2">
         <div className="flex items-center justify-center gap-2">
           <h3 className="truncate text-[15px] font-semibold text-white">{library.name}</h3>
@@ -330,19 +336,18 @@ function LibraryCard({
               {library.scanning ? "扫描中" : "整理中"}
             </span>
           )}
+          {importing > 0 && (
+            <span className="flex shrink-0 items-center gap-1.5 rounded-full border border-[#7dd3fc]/40 bg-[#7dd3fc]/15 px-2 py-0.5 text-[10.5px] font-semibold text-[#7dd3fc]">
+              <span className="size-1.5 animate-pulse rounded-full bg-[#7dd3fc]" />
+              {importing} 个新文件入库中
+            </span>
+          )}
           {stats.unidentified_count > 0 && (
             <span className="shrink-0 rounded-full border border-[#f5c451]/40 bg-[#f5c451]/15 px-2 py-0.5 text-[10.5px] font-semibold text-[#f5c451]">
               {stats.unidentified_count} 个待识别
             </span>
           )}
         </div>
-        <p
-          className="mt-1 truncate text-center text-[11.5px] text-white/50"
-          title={library.primary_root ?? undefined}
-        >
-          {meta.label} · {summary}
-          {library.primary_root ? ` · ${library.primary_root}` : ""}
-        </p>
       </div>
 
       {/* 管理操作：悬停浮现在右上角（Link 外层，避免点菜单触发跳转） */}

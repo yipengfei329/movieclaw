@@ -1,7 +1,11 @@
-# MovieClaw Cookie 同步助手（浏览器插件）
+# MovieClaw（浏览器插件）
 
 配套 MovieClaw 主程序使用的极简 Chrome 插件。核心作用：读取你正在浏览的站点的
 Cookie（含 httpOnly 会话 Cookie），用于主程序的站点模拟访问。
+
+> 普通用户无需从源码构建：在 MovieClaw 后台「设置 → 浏览器插件」页可直接下载
+> 插件包（zip），解压后按页面指引加载即可。后台页面会自动检测插件是否已安装
+> （原理：manifest 固定了公钥 `key`，插件 ID 恒定，Web 端探测其标记文件）。
 
 ## 技术选型
 
@@ -23,7 +27,11 @@ Cookie（含 httpOnly 会话 Cookie），用于主程序的站点模拟访问。
 pnpm ext:dev      # 启动开发模式，自动打开带插件的 Chrome
 pnpm ext:build    # 生产构建，产物在 apps/extension/.output/chrome-mv3
 pnpm ext:zip      # 打包成可上传应用商店的 zip
+pnpm ext:publish  # 打 zip 并发布到 apps/web/public/extension/（Web 后台的下载按钮指向这里）
 ```
+
+改动插件代码后记得跑 `pnpm ext:publish` 并提交生成的 zip——它随前端一起构建 /
+打进 Docker 镜像，用户从后台下载的就是这份产物。
 
 ## 手动加载（无需命令行）
 

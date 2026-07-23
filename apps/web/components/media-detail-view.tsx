@@ -9,9 +9,9 @@ import {
   ChevronRightIcon,
   PhotoIcon,
   PlayIcon,
-  PlusIcon,
   StarIcon,
 } from "@/components/icons";
+import { Breadcrumb } from "@/components/breadcrumb";
 import { ImageLightbox, type LightboxAction } from "@/components/image-lightbox";
 import { MediaRow } from "@/components/media-row";
 import { PosterImage } from "@/components/poster-image";
@@ -24,7 +24,8 @@ import {
 } from "@/lib/api/discover";
 import { useSubscribeEntry } from "@/components/subscribe-entry";
 import { useBackdrop } from "@/lib/backdrop";
-import { getMediaSeed, useMediaDetail } from "@/lib/media-detail";
+import { getMediaOrigin, getMediaSeed, useMediaDetail } from "@/lib/media-detail";
+import { usePageTitle } from "@/lib/use-page-title";
 import type { MediaSource, MediaType } from "@/lib/media-types";
 import {
   subscriptionProgressNote,
@@ -35,8 +36,9 @@ import {
  * 影片详情页：点击任意海报后，主内容区整体切换为该影片的详情。
  *
  * 页面纵向结构（Apple TV / 豆瓣式）：
- *   1. Hero 大剧照 —— 有 backdropUrl 用宽幅剧照，没有则用海报重度模糊铺底
- *      （氛围色永远可用，不依赖每部影片都配横图）；左上角浮玻璃返回钮。
+ *   1. 来路面包屑 + Hero 大剧照 —— 有 backdropUrl 用宽幅剧照，没有则用海报
+ *      重度模糊铺底（氛围色永远可用，不依赖每部影片都配横图）；面包屑父级
+ *      按点进来的列表页动态推导（见 lib/media-detail.tsx），直达时按类型兜底。
  *   2. 头部信息区 —— 海报上浮压住 Hero 底边，右侧标题 / 元信息 / 操作按钮，
  *      已订阅的影片额外显示订阅状态与追更进度。
  *   3. 剧情简介 + 词条信息玻璃卡（导演 / 主演 / 上映 / 地区 / 语言）。
@@ -93,6 +95,7 @@ export function MediaDetailView({
 
   // 详情接口回填过 extent（片长/季数）等字段，未返回前先用列表字段渲染
   const item = detail?.item ?? listItem;
+  usePageTitle(item?.title);
 
   // 无 seed 且详情尚未到达：直达链接的加载态（或失败兜底）。
   if (!item) {
@@ -115,10 +118,21 @@ export function MediaDetailView({
       year: item.year || undefined,
     });
 
+  // 来路面包屑：站内点进来按来的列表页渲染父级；直达/刷新按影片类型兜底
+  const trail = [
+    ...(getMediaOrigin(source, id) ?? [
+      isMovie
+        ? { label: "发现电影", href: "/discover/movie" }
+        : { label: "发现剧集", href: "/discover/tv" },
+    ]),
+    { label: item.title },
+  ];
+
   return (
     <div className="scroll-thin h-full overflow-y-auto pb-12">
-      {/* —— 1. Hero 大剧照 —— */}
-      <div className="px-6 pt-5">
+      {/* —— 1. 来路面包屑 + Hero 大剧照 —— */}
+      <div className="px-6 pt-3">
+        <Breadcrumb items={trail} className="mb-3" />
         <div className="relative h-[42vh] min-h-[280px] overflow-hidden rounded-2xl shadow-[0_24px_70px_-18px_rgba(0,0,0,0.62)] ring-1 ring-white/10">
           <PosterImage
             src={item.backdropUrl}
@@ -137,14 +151,6 @@ export function MediaDetailView({
           <div className="absolute inset-0 bg-gradient-to-r from-[rgba(7,9,14,0.72)] via-[rgba(7,9,14,0.25)] to-transparent" />
           <div className="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-[rgba(7,9,14,0.88)] via-[rgba(7,9,14,0.35)] to-transparent" />
 
-          <button
-            type="button"
-            aria-label="返回"
-            onClick={close}
-            className="surface-raised absolute left-4 top-4 z-10 flex size-9 items-center justify-center !rounded-full text-[var(--text)] transition-transform duration-200 hover:scale-110"
-          >
-            <ArrowLeftIcon className="size-4" />
-          </button>
         </div>
       </div>
 
@@ -216,13 +222,6 @@ export function MediaDetailView({
                 订阅追踪
               </button>
             )}
-            <button
-              type="button"
-              className="btn-glass h-10 bg-white/10 px-5 text-[13px] font-medium backdrop-blur-md"
-            >
-              <PlusIcon className="size-4" />
-              加入想看
-            </button>
             {source === "douban" && info?.sourceUrl && (
               <a
                 href={info.sourceUrl}

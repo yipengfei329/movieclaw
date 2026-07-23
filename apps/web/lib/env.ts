@@ -5,5 +5,5 @@ function readPublicEnv(key: string, fallback: string): string {
 
 export const publicEnv = {
   apiBaseUrl: readPublicEnv("NEXT_PUBLIC_API_BASE_URL", "/api/v1"),
-  appName: readPublicEnv("NEXT_PUBLIC_APP_NAME", "movieclaw console"),
+  appName: readPublicEnv("NEXT_PUBLIC_APP_NAME", "MovieClaw"),
 } as const;

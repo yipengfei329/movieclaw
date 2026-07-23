@@ -517,7 +517,7 @@ function PresetEditor({
             <p className="text-[12px] text-[var(--text-faint)]">正在加载站点列表…</p>
           ) : siteOptions.length === 0 ? (
             <p className="text-[12px] text-[var(--text-faint)]">
-              还没有配置任何站点；先去「资源站点配置」接入站点，或直接保存（默认搜全部可用站点）。
+              还没有配置任何站点；先去「资源站点」接入站点，或直接保存（默认搜全部可用站点）。
             </p>
           ) : (
             <div className="flex flex-wrap gap-1.5">

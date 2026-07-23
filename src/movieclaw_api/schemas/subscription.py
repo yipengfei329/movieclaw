@@ -165,6 +165,23 @@ class PrepareView(BaseModel):
     candidates: list[ResolveCandidateView] = Field(default_factory=list)
 
 
+class DispatchPreviewView(BaseModel):
+    """投递路由预检（订阅弹窗选库时的即时提示）。
+
+    与真实投递的三级兜底 + 映射守门同源判定，把"下载完成后能不能进库"
+    这个问题在订阅那一刻就回答掉，而不是等投递失败/落点告警才暴露。
+    """
+
+    mode: Literal["watch", "inplace", "downloader_default"] = Field(
+        description="投递路由：监听导入目录 / 直接下载进库 / 下载器默认目录"
+    )
+    path: str | None = Field(default=None, description="movieclaw 视角的投递基底目录")
+    library_name: str | None = None
+    downloader_name: str | None = None
+    ok: bool = Field(description="按当前配置投递能否顺利入库")
+    warning: str | None = Field(default=None, description="不 ok 时的中文指引")
+
+
 # ---------------------------------------------------------------------------
 # 订阅 CRUD
 # ---------------------------------------------------------------------------

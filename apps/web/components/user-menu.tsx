@@ -4,15 +4,14 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { AvatarBadge } from "@/components/avatar-badge";
-import { GearIcon, LogoutIcon, UserIcon } from "@/components/icons";
+import { GearIcon, LogoutIcon } from "@/components/icons";
 import { logout } from "@/lib/api/auth";
 import { useSession } from "@/lib/session";
 
 /**
  * 左下角的用户信息入口。
- * 点击后向上弹出菜单（CSS 玻璃，不占 WebGL 上下文）：
- *   查看个人信息 / 设置 / 退出登录。
- * 「查看个人信息」「设置」都会切换到设置模式并定位到对应分区。
+ * 点击后向上弹出菜单（CSS 玻璃，不占 WebGL 上下文）：设置 / 退出登录。
+ * 「设置」切换到设置模式。
  */
 export interface UserMenuProps {
   onOpenSettings: (sectionId?: string) => void;
@@ -99,7 +98,6 @@ export function UserMenu({ onOpenSettings, collapsed = false }: UserMenuProps) {
         </div>
       </div>
       <div className="my-1" />
-      <MenuItem icon={<UserIcon className="size-[18px]" />} label="查看个人信息" onClick={() => go("profile")} />
       <MenuItem icon={<GearIcon className="size-[18px]" />} label="设置" onClick={() => go()} />
       <div className="my-1" />
       <MenuItem

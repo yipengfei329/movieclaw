@@ -178,8 +178,10 @@ async def test_rescue_requeues_stalled_torrent(db, monkeypatch):
 
     status = SimpleNamespace(name="Slow.Torrent", completed=False, progress=0.5)
 
+    fake_downloader = SimpleNamespace(name="测试下载器", path_mappings=None)
+
     async def query_status(info_hash, downloaders):
-        return status
+        return fake_downloader, status
 
     monkeypatch.setattr(progress_mod, "_query_torrent", query_status)
     await progress_mod._rescue_group(sub_id, "abc123", downloaders=[])
@@ -188,13 +190,89 @@ async def test_rescue_requeues_stalled_torrent(db, monkeypatch):
         wanted = await session.get(WantedItem, wanted_id)
         assert wanted.status == WantedStatus.WANTED  # 卡死退回
 
-    # 已完成待入库：救援不做任何事（搬运归监听导入/扫描，工单归库存对账）
+    # 已完成待入库（宽限期内）：救援不做任何事（搬运归监听导入/扫描，
+    # 工单归库存对账，落点核验也等宽限期过后才判）
     _library_id2, _item_id2, sub_id2, wanted_id2 = await _seed_second(db)
     status.completed = True
     await progress_mod._rescue_group(sub_id2, "def456", downloaders=[])
     async with db.session() as session:
         wanted = await session.get(WantedItem, wanted_id2)
         assert wanted.status == WantedStatus.GRABBED
+
+
+@pytest.mark.asyncio
+async def test_rescue_alerts_unreachable_landing(db, monkeypatch, tmp_path):
+    """落点核验：完成种子的实际目录在 movieclaw 侧不可见 → 告警活动去重记一次；
+    可见则安静等待入库。"""
+    from types import SimpleNamespace
+
+    stale = utcnow() - timedelta(minutes=progress_mod._LANDING_GRACE_MINUTES + 5)
+    _library_id, _item_id, sub_id, wanted_id = await _seed(db, grabbed_at=stale)
+
+    # 下载器视角 /downloads ↔ movieclaw 视角 tmp_path/downloads（内容不存在）
+    fake_downloader = SimpleNamespace(
+        name="qb",
+        path_mappings=[{"local": str(tmp_path / "downloads"), "remote": "/downloads"}],
+    )
+    status = SimpleNamespace(
+        name="Some.Show.S01",
+        completed=True,
+        progress=1.0,
+        save_path="/downloads",
+        files=[SimpleNamespace(path="Some.Show.S01/e1.mkv", size_bytes=1)],
+    )
+
+    async def query_status(info_hash, downloaders):
+        return fake_downloader, status
+
+    monkeypatch.setattr(progress_mod, "_query_torrent", query_status)
+    await progress_mod._rescue_group(sub_id, "abc123", downloaders=[])
+    await progress_mod._rescue_group(sub_id, "abc123", downloaders=[])  # 二跑验证去重
+
+    async with db.session() as session:
+        wanted = await session.get(WantedItem, wanted_id)
+        assert wanted.status == WantedStatus.GRABBED  # 不退回：数据真实存在
+        activities = list(
+            (
+                await session.execute(
+                    select(SubscriptionActivity).where(
+                        SubscriptionActivity.subscription_id == sub_id,
+                        SubscriptionActivity.type == "import_failed",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(activities) == 1  # 去重：只告警一次
+        assert "看不到它" in activities[0].message
+        assert activities[0].payload["reason"] == "path_unreachable"
+        assert activities[0].payload["local_dir"] == str(tmp_path / "downloads")
+
+    # 内容出现在预期位置后：不再新增告警（新种子哈希避开去重逻辑的干扰；
+    # 工单时间改旧到宽限期外，确保走到落点判定而非被宽限期短路）
+    (tmp_path / "downloads" / "Some.Show.S01").mkdir(parents=True)
+    _l2, _i2, sub_id2, w2 = await _seed_second(db)
+    async with db.session() as session:
+        second = await session.get(WantedItem, w2)
+        second.grabbed_at = stale
+        second.updated_at = stale
+        await session.commit()
+    await progress_mod._rescue_group(sub_id2, "def456", downloaders=[])
+    async with db.session() as session:
+        activities = list(
+            (
+                await session.execute(
+                    select(SubscriptionActivity).where(
+                        SubscriptionActivity.subscription_id == sub_id2,
+                        SubscriptionActivity.type == "import_failed",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert activities == []
 
 
 async def _seed_second(db):

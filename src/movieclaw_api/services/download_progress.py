@@ -9,7 +9,12 @@
   短冷却后重新找资源；
 - 种子长期（STALLED_REQUEUE_DAYS）未完成 → 视为卡死，退回重新找
   资源（旧种子若之后完成，库存对账照样关闭工单，不冲突）；
-- 其余情况（下载中/已完成待入库）不做任何事。
+- 种子已完成 → **落点核验**：把下载器上报的实际保存目录反向过路径
+  映射翻译回 movieclaw 视角，本地看不到种子内容（超过宽限期）说明
+  落进了 movieclaw 不可达的位置（映射缺失/卷未挂载/用户在下载器里
+  移动了文件）——记一条中文告警活动（去重只记一次），不退回重找
+  （数据真实存在，重找只会重复下载到同一个黑洞）；
+- 其余情况（下载中/已完成且落点可见待入库）不做任何事。
 
 失败语义沿用：每组独立处理，单组失败不拖垮整轮，中文活动可回放。
 """
@@ -19,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import timedelta
+from pathlib import Path
 
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -67,7 +73,8 @@ _IN_FLIGHT = (WantedStatus.GRABBED, WantedStatus.DOWNLOADED)
     trigger_type=TriggerType.INTERVAL,
     interval_seconds=PROGRESS_TICK_SECONDS,
     description=(
-        "照看订阅在途投递的种子：被手动删除或长期卡死的工单退回重新找资源。"
+        "照看订阅在途投递的种子：被手动删除或长期卡死的工单退回重新找资源；"
+        "已完成的核验落点，movieclaw 看不到文件时在时间线告警。"
         "下载完成后的入库由监听导入/库扫描完成，工单由库存对账关闭。"
     ),
 )
@@ -132,8 +139,11 @@ async def _usable_downloaders(
 
 async def _query_torrent(
     info_hash: str, downloaders: list[tuple[DownloaderClient, DownloaderConfig]]
-) -> TorrentStatus | None:
-    """在全部可用下载器中查找种子（先到先得；单台故障不影响其余）。"""
+) -> tuple[DownloaderClient, TorrentStatus] | None:
+    """在全部可用下载器中查找种子（先到先得；单台故障不影响其余）。
+
+    连同命中的下载器记录一起返回——落点核验需要它的路径映射做反向翻译。
+    """
     for row, config in downloaders:
         adapter = create_downloader(config)
         try:
@@ -144,7 +154,7 @@ async def _query_torrent(
         finally:
             await adapter.close()
         if status is not None:
-            return status
+            return row, status
     return None
 
 
@@ -153,7 +163,8 @@ async def _rescue_group(
     info_hash: str,
     downloaders: list[tuple[DownloaderClient, DownloaderConfig]],
 ) -> None:
-    status = await _query_torrent(info_hash, downloaders)
+    found = await _query_torrent(info_hash, downloaders)
+    downloader_row, status = found if found is not None else (None, None)
     db = get_database()
     async with db.session() as session:
         # 组内工单在会话内重取（库存对账可能刚关闭了其中一部分）
@@ -209,14 +220,93 @@ async def _rescue_group(
             )
             return
 
-        # 下载中/已完成待入库：不做任何事——完成后的搬运由监听导入/库扫描
-        # 负责，工单由库存对账关闭
-        logger.debug(
-            "《%s》的种子 %s：%s",
-            item.title,
-            info_hash,
-            "已完成待入库" if status.completed else "下载中",
+        if status.completed:
+            # 已完成：核验落点（movieclaw 侧看不到内容 → 告警活动），
+            # 搬运仍归监听导入/库扫描，工单仍归库存对账
+            assert downloader_row is not None  # found 非 None 时二者同源
+            await _verify_landing(session, repo, rows, info_hash, downloader_row, status)
+            return
+
+        logger.debug("《%s》的种子 %s：下载中", item.title, info_hash)
+
+
+# 落点核验宽限期：完成后给下载器归位文件/网络盘可见性留出的窗口
+_LANDING_GRACE_MINUTES = 10
+
+
+async def _verify_landing(
+    session: AsyncSession,
+    repo: SubscriptionRepository,
+    rows: list[WantedItem],
+    info_hash: str,
+    downloader: DownloaderClient,
+    status,
+) -> None:
+    """核验已完成种子的落点：movieclaw 侧看不到内容则记告警活动（去重）。
+
+    判定：下载器上报的实际保存目录反向过路径映射翻译回 movieclaw 视角，
+    在本地 stat 种子内容根（首个文件的顶层段，或任务名）。看不到就说明
+    文件落在 movieclaw 不可达的位置——映射缺失/卷未挂载/被人工移动，
+    监听导入和库扫描永远等不到它，必须把问题亮到时间线上。
+    不退回重找：数据真实存在，重找只会重复下载到同一个黑洞。
+    """
+    from movieclaw_api.services.torrent_submit import translate_to_local
+
+    # 宽限期内不判：刚完成的种子可能还在归位（qB 临时目录搬移等）
+    threshold = utcnow() - timedelta(minutes=_LANDING_GRACE_MINUTES)
+    if any((w.grabbed_at or w.updated_at) > threshold for w in rows):
+        return
+
+    local_dir = translate_to_local(status.save_path, downloader.path_mappings)
+    root = status.files[0].path.split("/")[0] if status.files else status.name
+    if not local_dir or not root:
+        return
+    if (Path(local_dir) / root).exists():
+        return  # 落点可见，等监听导入/库扫描接管即可
+
+    # 去重：同一（订阅, 种子）只告警一次，避免每 5 分钟刷屏
+    existing = (
+        (
+            await session.execute(
+                select(SubscriptionActivity).where(
+                    SubscriptionActivity.subscription_id == rows[0].subscription_id,
+                    SubscriptionActivity.type == ActivityType.IMPORT_FAILED,
+                )
+            )
         )
+        .scalars()
+        .all()
+    )
+    for activity in existing:
+        payload = activity.payload or {}
+        if payload.get("info_hash") == info_hash and payload.get("reason") == "path_unreachable":
+            return
+
+    await repo.add_activity(
+        SubscriptionActivity(
+            subscription_id=rows[0].subscription_id,
+            wanted_item_id=rows[0].id,
+            type=ActivityType.IMPORT_FAILED,
+            message=(
+                f"「{status.name}」已下载完成，但 movieclaw 在 {local_dir} 看不到它——"
+                f"下载器「{downloader.name}」可能无法访问该路径（路径映射缺失或卷未挂载），"
+                "或文件已在下载器中被移动。请检查「设置 → 下载器」的路径映射，"
+                "或改用监听导入规则后把文件移入监听目录"
+            ),
+            payload={
+                "info_hash": info_hash,
+                "reason": "path_unreachable",
+                "downloader_save_path": status.save_path,
+                "local_dir": local_dir,
+            },
+        )
+    )
+    logger.warning(
+        "落点核验失败：《种子 %s》完成于 %s（下载器视角 %s），movieclaw 侧不可见",
+        info_hash,
+        local_dir,
+        status.save_path,
+    )
 
 
 def _stalled(rows: list[WantedItem]) -> bool:

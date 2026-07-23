@@ -68,6 +68,7 @@ class DownloaderConfigService:
         username: str | None,
         password: str | None,
         save_path: str | None,
+        path_mappings: list[dict[str, str]] | None = None,
         enabled: bool = True,
     ) -> DownloaderClient:
         """新增下载器配置（状态置 PENDING，等待异步测试连接）。"""
@@ -79,6 +80,7 @@ class DownloaderConfigService:
             username=username,
             password=password,
             save_path=save_path,
+            path_mappings=path_mappings,
             enabled=enabled,
         )
 
@@ -92,6 +94,7 @@ class DownloaderConfigService:
         username: str | None,
         password: str | None,
         save_path: str | None,
+        path_mappings: list[dict[str, str]] | None = None,
         enabled: bool,
     ) -> DownloaderClient:
         """整体更新下载器配置；不存在抛 404，正在验证中抛 409。"""
@@ -106,6 +109,7 @@ class DownloaderConfigService:
             username=username,
             password=password,
             save_path=save_path,
+            path_mappings=path_mappings,
             enabled=enabled,
         )
         assert updated is not None  # get() 已确认存在

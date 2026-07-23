@@ -52,7 +52,7 @@ export interface SidebarProps {
 const mainNavItems = [
   { id: "new", label: "新任务", icon: PlusIcon },
   { id: "library", label: "媒体库", icon: LayersIcon },
-  { id: "subscriptions", label: "订阅", icon: BookmarkIcon },
+  { id: "subscriptions", label: "我的订阅", icon: BookmarkIcon },
   ...exploreItems,
 ];
 

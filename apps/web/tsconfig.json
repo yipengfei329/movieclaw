@@ -32,11 +32,19 @@
   "include": [
     "**/*.ts",
     "**/*.tsx",
+    ".next-breadcrumb/types/**/*.ts",
+    ".next-extinstall/types/**/*.ts",
+    ".next-importbadge/types/**/*.ts",
+    ".next-newtask/types/**/*.ts",
+    ".next-preview-dirpick/types/**/*.ts",
     ".next-preview-libhome/types/**/*.ts",
     ".next-preview-library/types/**/*.ts",
+    ".next-subcancel/types/**/*.ts",
+    ".next-subinspector/types/**/*.ts",
+    ".next-wishbtn/types/**/*.ts",
     ".next/types/**/*.ts",
     "next-env.d.ts",
-    ".next-preview-dirpick/types/**/*.ts"
+    ".next-preview-pathmap/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

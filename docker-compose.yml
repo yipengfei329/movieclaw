@@ -1,0 +1,38 @@
+# =============================================================================
+# movieclaw 部署示例（Docker / NAS）
+#
+# 快速开始：
+#   1. 按需修改下面的媒体目录挂载
+#   2. docker compose up -d
+#   3. 浏览器打开 http://<主机IP>:3000，按引导创建管理员账号
+#
+# 说明：
+#   - 镜像已内置 TMDB Key 和 NER 模型，开箱即用
+#   - ./data 保存全部运行数据（数据库、日志、密钥、缓存、上传），备份它即可
+#   - 媒体目录按你的实际路径挂载，容器内路径将用于「设置 → 媒体库/监听导入」
+# =============================================================================
+services:
+  movieclaw:
+    image: movieclaw:latest
+    container_name: movieclaw
+    init: true
+    ports:
+      - "3000:3000"
+    volumes:
+      # 运行数据（必须）
+      - ./data:/app/data
+      # 媒体盘挂载示例（按实际情况修改/增删）：
+      # - /volume1/media:/media
+      # 下载器的保存目录也要以相同路径挂进来，movieclaw 才能对下载完成的文件做入库整理：
+      # - /volume1/downloads:/downloads
+    environment:
+      # 时区影响定时任务与日志时间戳
+      - TZ=Asia/Shanghai
+      # 如需覆盖镜像内置的 TMDB Key，取消注释：
+      # - TMDB_API_KEY=你自己的key
+      # 公网 HTTPS 部署时建议开启（Cookie 仅走 https）：
+      # - SESSION_COOKIE_SECURE=true
+      # Emby/Jellyfin 入库通知（可选）：
+      # - MEDIA_SERVER_URL=http://192.168.1.10:8096
+      # - MEDIA_SERVER_TOKEN=xxxx
+    restart: unless-stopped

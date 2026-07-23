@@ -6,6 +6,7 @@ import type { Route } from "next";
 
 import { AuthError, AuthField, AuthScreen } from "@/components/auth-screen";
 import { getBootstrapStatus, getSession, login } from "@/lib/api/auth";
+import { usePageTitle } from "@/lib/use-page-title";
 import { HttpError } from "@/lib/http";
 
 /**
@@ -29,6 +30,7 @@ function resolveNext(): string {
  * 安全性完全由后端保证，这里的跳转只是导航体验。
  */
 export default function LoginPage() {
+  usePageTitle("登录");
   const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");

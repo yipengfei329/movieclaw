@@ -14,8 +14,17 @@ const inter = Inter({
   display: "swap",
 });
 
+/**
+ * 全站标题规范：主页（新任务）就是品牌名本身；子页面用「{页面名} · 品牌名」。
+ * 静态子页在各自 page.tsx 里 export metadata（走这里的 template）；
+ * 数据驱动的子页（库名/片名/会话名/搜索词）由 lib/use-page-title.ts 在
+ * 数据就绪后写 document.title，格式与 template 保持一致。
+ */
 export const metadata: Metadata = {
-  title: publicEnv.appName,
+  title: {
+    default: publicEnv.appName,
+    template: `%s · ${publicEnv.appName}`,
+  },
   description: "Movieclaw 控制台 —— 液态玻璃风格的影视追踪工作台。",
 };
 
