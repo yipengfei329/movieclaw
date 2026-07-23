@@ -33,16 +33,25 @@ async def submit_download(
 ) -> ApiResponse[DownloadSubmitView]:
     """手动下载：带站点登录态取回 .torrent → 提交给默认下载器。
 
-    保存目录三级取值：选了媒体库 → 库推导路径（主根/标题 (年份)，无标题时
-    落库主根）；未选库 → 默认下载器配置的默认目录 → 下载器自身默认。
+    保存目录取值（与订阅同一决策）：选了库且库有监听导入规则 → 规则源
+    目录（完成后监听导入接管、规范命名进库）；选库无规则 → 库推导路径
+    （主根/标题 (年份)，直接下载进库原地收纳——扫描的完整性检测保证
+    半成品不入账）；未选库 → 下载器默认目录。
     提交幂等：种子已在下载器中不视为错误，data.already_exists=true。
     """
+    from movieclaw_api.services.import_watch_config import resolve_dispatch_dir
+
     library = None
     derived_path = None
+    entry_level = False  # 条目级目录才允许锚下载线索
     if payload.library_id is not None:
         library = await LibraryConfigService(session).get(payload.library_id)
-        if payload.title:
+        rule_dir = await resolve_dispatch_dir(session, library.id)
+        if rule_dir is not None:
+            derived_path = rule_dir
+        elif payload.title:
             derived_path = derive_save_path(library, title=payload.title, year=payload.year)
+            entry_level = derived_path is not None
         else:
             derived_path = library.primary_root
 
@@ -52,9 +61,8 @@ async def submit_download(
         download_url=payload.download_url,
         tags=["movieclaw-manual"],
         save_path=derived_path,
-        # 线索只锚**条目级**目录（带 title 才推导得出）；落库主根时不传，
-        # 否则前缀匹配会波及根下所有文件
-        subtitle=payload.subtitle if payload.title else None,
+        # 线索只锚**条目级**目录；锚到库主根/监听目录会波及目录下所有文件
+        subtitle=payload.subtitle if entry_level else None,
     )
     assert row.id is not None  # 落库记录必有主键
     view = DownloadSubmitView(

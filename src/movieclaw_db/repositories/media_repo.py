@@ -33,9 +33,7 @@ class MediaItemRepository:
         )
         return list(result.scalars().all())
 
-    async def create_with_seasons(
-        self, item: MediaItem, seasons: list[MediaSeason]
-    ) -> MediaItem:
+    async def create_with_seasons(self, item: MediaItem, seasons: list[MediaSeason]) -> MediaItem:
         """建档：条目与季一次事务落库，返回带 id 的条目。"""
         self._session.add(item)
         await self._session.flush()  # 先拿到 item.id 供季行引用

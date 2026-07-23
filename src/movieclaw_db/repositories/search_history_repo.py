@@ -121,9 +121,7 @@ class SearchHistoryRepository:
         stale_ids = list(result.scalars().all())
         if not stale_ids:
             return
-        await self._session.execute(
-            sa_delete(SearchHistory).where(SearchHistory.id.in_(stale_ids))
-        )
+        await self._session.execute(sa_delete(SearchHistory).where(SearchHistory.id.in_(stale_ids)))
         await self._session.commit()
 
     async def list_recent_groups(self, limit: int = 10) -> list[SearchHistory]:

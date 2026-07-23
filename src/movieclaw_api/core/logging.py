@@ -20,9 +20,7 @@ from pathlib import Path
 # 日志文件命名：movieclaw-2026-07-18.log；正则同时被查看接口用于枚举可用日期
 LOG_FILE_PREFIX = "movieclaw-"
 LOG_FILE_SUFFIX = ".log"
-LOG_FILE_PATTERN = re.compile(
-    rf"^{LOG_FILE_PREFIX}(\d{{4}}-\d{{2}}-\d{{2}})\{LOG_FILE_SUFFIX}$"
-)
+LOG_FILE_PATTERN = re.compile(rf"^{LOG_FILE_PREFIX}(\d{{4}}-\d{{2}}-\d{{2}})\{LOG_FILE_SUFFIX}$")
 
 
 def log_file_path(log_dir: str | Path, day: date) -> Path:

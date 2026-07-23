@@ -57,8 +57,8 @@ class _SiteEntry:
 
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     site: BaseSite | None = None
-    stamp: datetime | None = None     # 构建时凭据的 updated_at（新鲜度戳）
-    built_at: float = 0.0             # 构建时刻（monotonic），用于 TTL 判断
+    stamp: datetime | None = None  # 构建时凭据的 updated_at（新鲜度戳）
+    built_at: float = 0.0  # 构建时刻（monotonic），用于 TTL 判断
 
 
 class SiteAccessManager:

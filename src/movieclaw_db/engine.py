@@ -47,7 +47,7 @@ def _ensure_sqlite_dir(database_url: str) -> None:
     prefix = "sqlite+aiosqlite:///"
     if not database_url.startswith(prefix):
         return
-    raw_path = database_url[len(prefix):]
+    raw_path = database_url[len(prefix) :]
     # 内存数据库（:memory: 或空路径）无需建目录
     if not raw_path or raw_path.startswith(":memory:"):
         return

@@ -250,6 +250,7 @@ def test_every_route_denies_anonymous_access(client: TestClient) -> None:
             .replace("{subscription_id}", "1")
             .replace("{rule_set_id}", "1")
             .replace("{library_id}", "1")
+            .replace("{rule_id}", "1")
             .replace("{file_id}", "1")
             .replace("{run_id}", "test-run")
             .replace("{session_id}", "test-session")

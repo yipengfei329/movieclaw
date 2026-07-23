@@ -8,6 +8,7 @@ import { createPortal } from "react-dom";
 
 import { DirectoryPicker } from "@/components/directory-picker";
 import { FilmIcon, FolderIcon, MoreIcon, PlusIcon, TvIcon, XIcon } from "@/components/icons";
+import { LibraryOrganizeDialog } from "@/components/library-organize-dialog";
 import { MediaRow } from "@/components/media-row";
 import type { PosterCardAction } from "@/components/poster-card";
 import { Tooltip } from "@/components/tooltip";
@@ -81,6 +82,8 @@ export function LibraryView() {
   const [error, setError] = useState<string | null>(null);
   // 弹窗态：新增（"new"）/ 编辑（库对象）/ 关闭(null)
   const [editing, setEditing] = useState<MediaLibrary | "new" | null>(null);
+  // 整理文件名对话框的目标库；null = 关闭
+  const [organizeTarget, setOrganizeTarget] = useState<MediaLibrary | null>(null);
 
   const reload = useCallback(() => {
     setFailed(false);
@@ -102,13 +105,13 @@ export function LibraryView() {
     reload();
   }, [reload]);
 
-  // 有库在扫描时轮询刷新，扫描完成即看到新库存
-  const scanningAny = (libraries ?? []).some((l) => l.scanning);
+  // 有库在扫描/整理时轮询刷新，任务完成即看到最新库存与文件名
+  const busyAny = (libraries ?? []).some((l) => l.scanning || l.organizing);
   useEffect(() => {
-    if (!scanningAny) return;
+    if (!busyAny) return;
     const timer = setInterval(reload, 3000);
     return () => clearInterval(timer);
-  }, [scanningAny, reload]);
+  }, [busyAny, reload]);
 
   // 每个非空库一行「最近添加」：按最近入账时间倒序取前 20，复用发现页的
   // 横滚海报行；悬浮动作按条目三分支（追新/补齐/已入库，见 libraryCardAction）
@@ -188,6 +191,7 @@ export function LibraryView() {
               library={library}
               items={itemsByLibrary.get(library.id) ?? []}
               onEdit={() => setEditing(library)}
+              onOrganize={() => setOrganizeTarget(library)}
               onRefresh={reload}
               onError={setError}
             />
@@ -221,6 +225,12 @@ export function LibraryView() {
           setEditing(null);
           reload();
         }}
+      />
+
+      <LibraryOrganizeDialog
+        library={organizeTarget}
+        onClose={() => setOrganizeTarget(null)}
+        onChanged={reload}
       />
     </div>
   );
@@ -262,12 +272,14 @@ function LibraryCard({
   library,
   items,
   onEdit,
+  onOrganize,
   onRefresh,
   onError,
 }: {
   library: MediaLibrary;
   items: LibraryItem[];
   onEdit: () => void;
+  onOrganize: () => void;
   onRefresh: () => void;
   onError: (message: string) => void;
 }) {
@@ -293,9 +305,11 @@ function LibraryCard({
       >
         <div className="relative aspect-[21/10] bg-[#0a0c12]">
           <LibraryCover posters={posters} Icon={meta.Icon} />
-          {library.scanning && (
+          {(library.scanning || library.organizing) && (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/55 backdrop-blur-[2px]">
-              <ScanProgressRing progress={library.scan_progress} />
+              <ScanProgressRing
+                progress={library.scanning ? library.scan_progress : library.organize_progress}
+              />
             </div>
           )}
         </div>
@@ -310,10 +324,10 @@ function LibraryCard({
               默认
             </span>
           )}
-          {library.scanning && (
+          {(library.scanning || library.organizing) && (
             <span className="flex shrink-0 items-center gap-1.5 rounded-full border border-white/[0.14] bg-white/[0.06] px-2 py-0.5 text-[10.5px] font-semibold text-white/80">
               <span className="size-2.5 animate-spin rounded-full border border-white/30 border-t-white/90" />
-              扫描中
+              {library.scanning ? "扫描中" : "整理中"}
             </span>
           )}
           {stats.unidentified_count > 0 && (
@@ -340,6 +354,7 @@ function LibraryCard({
             .then(onRefresh)
             .catch((e) => onError((e as Error).message));
         }}
+        onOrganize={onOrganize}
         onRefresh={onRefresh}
         onError={onError}
       />
@@ -457,12 +472,14 @@ function LibraryCardMenu({
   library,
   onEdit,
   onScan,
+  onOrganize,
   onRefresh,
   onError,
 }: {
   library: MediaLibrary;
   onEdit: () => void;
   onScan: () => void;
+  onOrganize: () => void;
   onRefresh: () => void;
   onError: (message: string) => void;
 }) {
@@ -529,7 +546,7 @@ function LibraryCardMenu({
             </button>
             <button
               type="button"
-              disabled={library.scanning}
+              disabled={library.scanning || library.organizing}
               onClick={() => {
                 setMenuPos(null);
                 onScan();
@@ -537,6 +554,17 @@ function LibraryCardMenu({
               className="glass-row px-2.5 py-2 text-[13px] font-medium disabled:opacity-40"
             >
               {library.scanning ? "正在扫描…" : "扫描库"}
+            </button>
+            <button
+              type="button"
+              disabled={library.scanning || library.organizing}
+              onClick={() => {
+                setMenuPos(null);
+                onOrganize();
+              }}
+              className="glass-row px-2.5 py-2 text-[13px] font-medium disabled:opacity-40"
+            >
+              {library.organizing ? "正在整理…" : "整理文件名"}
             </button>
             <button
               type="button"
@@ -805,6 +833,7 @@ export function LibraryFormDialog({
           setPickerTarget(null);
         }}
       />
+
     </div>
   );
 }

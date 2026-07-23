@@ -10,9 +10,20 @@ from movieclaw_tracker.registry import SiteConfig, get_site_config, list_sites
 # 的同名逻辑保持一致，确保 kp.m-team.cc / api.m-team.cc 都能归到 m-team.cc。
 _MULTI_PART_TLDS = frozenset(
     {
-        "co.uk", "org.uk", "gov.uk", "ac.uk", "me.uk",
-        "com.cn", "net.cn", "org.cn", "gov.cn",
-        "com.hk", "com.tw", "com.au", "co.jp", "co.kr",
+        "co.uk",
+        "org.uk",
+        "gov.uk",
+        "ac.uk",
+        "me.uk",
+        "com.cn",
+        "net.cn",
+        "org.cn",
+        "gov.cn",
+        "com.hk",
+        "com.tw",
+        "com.au",
+        "co.jp",
+        "co.kr",
     }
 )
 
@@ -61,8 +72,7 @@ class SiteCatalogService:
         if auth_type.value not in config.supported_auth_types:
             supported = "、".join(config.supported_auth_types) or "（无）"
             raise BadRequestException(
-                f"站点 {site_id} 不支持授权类型 '{auth_type.value}'，"
-                f"支持的类型为：{supported}"
+                f"站点 {site_id} 不支持授权类型 '{auth_type.value}'，支持的类型为：{supported}"
             )
         return config
 

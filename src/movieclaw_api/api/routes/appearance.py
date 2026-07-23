@@ -73,9 +73,7 @@ async def upload_backdrop(file: UploadFile = File(...)) -> ApiResponse[Appearanc
     错误信息为中文，方便非开发者按提示处理。
     """
     if not appearance_media.is_supported_content_type(file.content_type):
-        raise BadRequestException(
-            "不支持的图片格式，请上传 JPG / PNG / WebP / GIF / AVIF 图片"
-        )
+        raise BadRequestException("不支持的图片格式，请上传 JPG / PNG / WebP / GIF / AVIF 图片")
 
     data = await file.read()
     if not data:

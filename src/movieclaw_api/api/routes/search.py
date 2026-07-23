@@ -56,17 +56,13 @@ async def search_torrents(
     categories: list[TorrentCategory] | None = Query(
         None, description="分类组合过滤（可多值：categories=movie&categories=tv）；不传表示不限分类"
     ),
-    sites: list[str] | None = Query(
-        None, description="站点子集（可多值）；不传表示全部可用站点"
-    ),
+    sites: list[str] | None = Query(None, description="站点子集（可多值）；不传表示全部可用站点"),
     label: str | None = Query(
         None,
         max_length=32,
         description="本次搜索的展示名（分类中文名/自定义分类名），仅用于历史与回显",
     ),
-    no_history: bool = Query(
-        False, description="无痕搜索：为 True 时本次搜索不写入搜索历史"
-    ),
+    no_history: bool = Query(False, description="无痕搜索：为 True 时本次搜索不写入搜索历史"),
     poster_mode: bool = Query(
         False,
         description="发起搜索时的图览模式偏好，仅随历史留存，用于点历史重搜/看快照时还原展示模式",
@@ -83,7 +79,9 @@ async def search_torrents(
         keyword=keyword, categories=categories, site_ids=sites, label=label, page=page
     )
     if not no_history:
-        history_id = await _record_history(session, keyword, categories, sites, label, page, poster_mode)
+        history_id = await _record_history(
+            session, keyword, categories, sites, label, page, poster_mode
+        )
         if history_id is not None:
             await _save_snapshot(history_id, result.items, result.sites, result.total)
     return ok(result)
@@ -156,17 +154,13 @@ async def search_torrents_stream(
     categories: list[TorrentCategory] | None = Query(
         None, description="分类组合过滤（可多值）；不传表示不限分类"
     ),
-    sites: list[str] | None = Query(
-        None, description="站点子集（可多值）；不传表示全部可用站点"
-    ),
+    sites: list[str] | None = Query(None, description="站点子集（可多值）；不传表示全部可用站点"),
     label: str | None = Query(
         None,
         max_length=32,
         description="本次搜索的展示名（分类中文名/自定义分类名），仅用于历史与回显",
     ),
-    no_history: bool = Query(
-        False, description="无痕搜索：为 True 时本次搜索不写入搜索历史"
-    ),
+    no_history: bool = Query(False, description="无痕搜索：为 True 时本次搜索不写入搜索历史"),
     poster_mode: bool = Query(
         False,
         description="发起搜索时的图览模式偏好，仅随历史留存，用于点历史重搜/看快照时还原展示模式",
@@ -184,7 +178,9 @@ async def search_torrents_stream(
     # 历史在流开始前落库：流式响应返回后请求级 session 的生命周期不再可靠
     history_id: int | None = None
     if not no_history:
-        history_id = await _record_history(session, keyword, categories, sites, label, page, poster_mode)
+        history_id = await _record_history(
+            session, keyword, categories, sites, label, page, poster_mode
+        )
 
     async def event_source():
         # 边转发边收集完整结果集，流正常走完（收到 done）后回写快照。
@@ -200,9 +196,7 @@ async def search_torrents_stream(
                 done = payload
             yield f"event: {event}\ndata: {payload.model_dump_json()}\n\n"
         if history_id is not None and done is not None:
-            await _save_snapshot(
-                history_id, collected, done.sites, done.total, done.elapsed_ms
-            )
+            await _save_snapshot(history_id, collected, done.sites, done.total, done.elapsed_ms)
 
     return StreamingResponse(
         event_source(),
@@ -223,9 +217,7 @@ def _preferences_view(tabs: list[SearchTab]) -> SearchPreferencesView:
     items: list[SearchTabItem] = []
     for tab in tabs:
         if isinstance(tab, SearchCategoryTab):
-            items.append(
-                CategoryTabItem(id=TorrentCategory(tab.id), visible=tab.visible)
-            )
+            items.append(CategoryTabItem(id=TorrentCategory(tab.id), visible=tab.visible))
         else:
             items.append(
                 PresetTabItem(

@@ -7,6 +7,7 @@ import { LiquidGlassButton } from "@/vendor/liquid-glass";
 import { AvatarBadge } from "@/components/avatar-badge";
 import { DownloaderConfigSection } from "@/components/downloader-config-section";
 import { ExtensionSection } from "@/components/extension-settings";
+import { ImportWatchSection } from "@/components/import-watch-section";
 import { LlmConfigSection } from "@/components/llm-config-section";
 import { SearchSection } from "@/components/search-settings";
 import { SiteConfigSection } from "@/components/site-config-section";
@@ -149,6 +150,8 @@ export function SettingsPanel({ active }: SettingsPanelProps) {
           <SiteConfigSection />
         ) : section.id === "downloaders" ? (
           <DownloaderConfigSection />
+        ) : section.id === "import-watch" ? (
+          <ImportWatchSection />
         ) : section.id === "llm" ? (
           <LlmConfigSection />
         ) : section.id === "extension" ? (

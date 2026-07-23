@@ -48,9 +48,7 @@ class SiteConfigService:
     def _assert_not_verifying(row: SiteCredential) -> None:
         """若站点正在验证中，拒绝当前操作（409）。"""
         if row.status == ConfigStatus.VERIFYING:
-            raise ConflictException(
-                f"站点 {row.site_id} 正在验证中，请等待验证完成后再操作"
-            )
+            raise ConflictException(f"站点 {row.site_id} 正在验证中，请等待验证完成后再操作")
 
     # -- 查询 --------------------------------------------------------------
 

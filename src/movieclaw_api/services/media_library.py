@@ -57,9 +57,7 @@ class MediaLibraryService:
         if existing is not None:
             return await self._backfill(existing, douban_id, extra_aliases)
 
-        profile = await fetch_media_profile(
-            self._client, kind, tmdb_id, language=self._language
-        )
+        profile = await fetch_media_profile(self._client, kind, tmdb_id, language=self._language)
         item, seasons = self._to_rows(profile, douban_id, extra_aliases)
         try:
             item = await self._repo.create_with_seasons(item, seasons)

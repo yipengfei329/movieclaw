@@ -7,6 +7,7 @@ import type { ComponentType, SVGProps } from "react";
 import {
   DownloadIcon,
   FilmIcon,
+  FolderIcon,
   PaletteIcon,
   PuzzleIcon,
   SearchIcon,
@@ -107,6 +108,7 @@ export const settingsSections: SettingsSection[] = [
   { id: "search", label: "搜索", description: "分类栏排序与自定义分类", icon: SearchIcon },
   { id: "sites", label: "资源站点配置", description: "PT 站点接入与鉴权", icon: ServerIcon },
   { id: "downloaders", label: "下载器", description: "qBittorrent / Transmission 接入", icon: DownloadIcon },
+  { id: "import-watch", label: "监听导入", description: "监听下载目录，完成的内容自动整理进媒体库", icon: FolderIcon },
   { id: "llm", label: "AI 模型", description: "大语言模型供应商接入", icon: SparkIcon },
   { id: "extension", label: "浏览器插件", description: "Cookie 同步令牌与活动", icon: PuzzleIcon },
   { id: "logs", label: "系统日志", description: "后端运行日志，按天存档", icon: TerminalIcon },

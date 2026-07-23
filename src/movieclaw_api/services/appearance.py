@@ -125,11 +125,7 @@ def list_backdrops() -> list[Path]:
     gallery = _gallery_dir()
     if not gallery.is_dir():
         return []
-    files = [
-        p
-        for p in gallery.iterdir()
-        if p.is_file() and p.stem != "" and is_valid_id(p.stem)
-    ]
+    files = [p for p in gallery.iterdir() if p.is_file() and p.stem != "" and is_valid_id(p.stem)]
     return sorted(files, key=lambda p: (p.stat().st_mtime_ns, p.name))
 
 
@@ -196,7 +192,5 @@ def remove_backdrop(backdrop_id: str) -> bool:
     path.unlink()
     if was_active:
         _write_active(None)
-    logger.info(
-        "已删除背景图：%s%s", path, "（原为生效图，已回退内置默认）" if was_active else ""
-    )
+    logger.info("已删除背景图：%s%s", path, "（原为生效图，已回退内置默认）" if was_active else "")
     return True

@@ -26,6 +26,7 @@ from movieclaw_downloader.models import (
     DownloaderType,
     DownloadRequest,
     SubmitResult,
+    TorrentBrief,
     TorrentFile,
     TorrentStatus,
 )
@@ -159,6 +160,29 @@ class QBittorrentDownloader(BaseDownloader):
                 for f in files
             ],
         )
+
+    async def list_torrents(self) -> list[TorrentBrief]:
+        return await asyncio.to_thread(self._list_torrents_sync)
+
+    def _list_torrents_sync(self) -> list[TorrentBrief]:
+        client = self._client()
+        with _translate_errors(self.config.url):
+            infos = client.torrents_info()
+        briefs = []
+        for torrent in infos:
+            # content_path 是下载器视角的落盘根路径，末段即磁盘上的真实
+            # 目录/文件名（种子在客户端里被改名后 name 会失真，末段不会）
+            content = str(getattr(torrent, "content_path", "") or "").rstrip("/\\")
+            content_name = content.replace("\\", "/").rsplit("/", 1)[-1] if content else ""
+            briefs.append(
+                TorrentBrief(
+                    name=torrent.name,
+                    content_name=content_name or torrent.name,
+                    completed=float(torrent.progress) >= 1.0,
+                    info_hash=str(torrent.hash).lower(),
+                )
+            )
+        return briefs
 
     async def test_connection(self) -> DownloaderInfo:
         return await asyncio.to_thread(self._test_connection_sync)

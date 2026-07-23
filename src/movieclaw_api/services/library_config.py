@@ -104,6 +104,28 @@ class LibraryConfigService:
             raise BadRequestException("根路径存在重复项")
         return cleaned
 
+    async def _assert_roots_clear_of_import_watch(self, roots: list[str]) -> None:
+        """根路径不得与任何监听导入规则的源目录前缀重叠。
+
+        源目录在库根之下会被扫描当存量原地入账，库根在源目录之下会把
+        整库当"下载完成的条目"搬运，两个方向都是双头管理的灾难。
+        监听导入侧建规则时做同样的反向校验（import_watch_config）。
+        """
+        from sqlmodel import select
+
+        from movieclaw_db.models import ImportWatch
+
+        rows = list((await self._session.execute(select(ImportWatch))).scalars().all())
+        for root in roots:
+            r = root.rstrip("/")
+            for rule in rows:
+                s = rule.source_path.rstrip("/")
+                if r == s or r.startswith(s + "/") or s.startswith(r + "/"):
+                    raise BadRequestException(
+                        f"根路径与监听导入的源目录重叠：{root} ↔ {rule.source_path}；"
+                        "请先调整「监听导入」配置"
+                    )
+
     async def _assert_name_available(self, name: str, *, exclude_id: int | None = None) -> None:
         existing = await self._repo.get_by_name(name)
         if existing is not None and existing.id != exclude_id:
@@ -111,27 +133,33 @@ class LibraryConfigService:
 
     @staticmethod
     async def _refresh_watcher() -> None:
-        """库/根路径变更后重建实时监听（监听器未启动时为 no-op）。"""
+        """库/根路径/监听目录变更后重建实时监听（监听器未启动时为 no-op）。"""
+        from movieclaw_api.services.library_ingest import get_ingest_watcher
         from movieclaw_api.services.library_watch import get_library_watcher
 
         watcher = get_library_watcher()
         if watcher is not None:
             await watcher.refresh_watches()
+        ingest_watcher = get_ingest_watcher()
+        if ingest_watcher is not None:
+            await ingest_watcher.refresh_watches()
 
     async def create(self, *, name: str, kind: MediaKind, root_paths: list[str]) -> Library:
         """新增一个库。该类型尚无默认库时自动成为默认。"""
-        cleaned = self._validate(name=name, root_paths=root_paths)
+        roots = self._validate(name=name, root_paths=root_paths)
+        await self._assert_roots_clear_of_import_watch(roots)
         await self._assert_name_available(name)
-        row = await self._repo.create(name=name.strip(), kind=kind.value, root_paths=cleaned)
+        row = await self._repo.create(name=name.strip(), kind=kind.value, root_paths=roots)
         await self._refresh_watcher()
         return row
 
     async def update(self, library_id: int, *, name: str, root_paths: list[str]) -> Library:
         """更新名称与根路径。kind 创建后不可改（订阅按类型挂库）。"""
         await self.get(library_id)
-        cleaned = self._validate(name=name, root_paths=root_paths)
+        roots = self._validate(name=name, root_paths=root_paths)
+        await self._assert_roots_clear_of_import_watch(roots)
         await self._assert_name_available(name, exclude_id=library_id)
-        updated = await self._repo.update(library_id, name=name.strip(), root_paths=cleaned)
+        updated = await self._repo.update(library_id, name=name.strip(), root_paths=roots)
         assert updated is not None  # get() 已确认存在
         await self._refresh_watcher()
         return updated

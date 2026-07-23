@@ -29,4 +29,3 @@ def create_app() -> FastAPI:
     register_middlewares(app, settings)
     app.include_router(api_router, prefix=settings.api_v1_prefix)
     return app
-

@@ -48,8 +48,8 @@ logger = logging.getLogger("movieclaw_api.torrent_sync")
 # tick：全局任务被唤醒的固定间隔。必须 ≤ MIN_INTERVAL，否则最快的站也排不上。
 _TICK_SECONDS = 120
 # 每站轮询间隔的上下限与起始值（秒）
-_MIN_INTERVAL = 300      # 5 分钟：发布最快的站也不会比这更密（礼貌下限之上的调度下限）
-_MAX_INTERVAL = 21600    # 6 小时：冷站最疏到此为止
+_MIN_INTERVAL = 300  # 5 分钟：发布最快的站也不会比这更密（礼貌下限之上的调度下限）
+_MAX_INTERVAL = 21600  # 6 小时：冷站最疏到此为止
 # 回补翻页上限：长时间宕机后避免失控狂爬；到顶仍未接上则记录缺口
 _MAX_BACKFILL_PAGES = 10
 
@@ -106,7 +106,7 @@ def _to_observation(
         subtitle=item.subtitle,
         category=category_value,
         site_category_id=item.site_category_id,
-        size_bytes=item.size_bytes,          # 0 会被 validator 归一为 None
+        size_bytes=item.size_bytes,  # 0 会被 validator 归一为 None
         size_text=item.size,
         publish_time=item.upload_time,
         uploader=item.uploader,
@@ -136,9 +136,7 @@ def _volatile_trustworthy(items: list[TorrentListItem]) -> bool:
     """
     if not items:
         return True
-    all_zero = all(
-        it.seeders == 0 and it.leechers == 0 and it.snatched == 0 for it in items
-    )
+    all_zero = all(it.seeders == 0 and it.leechers == 0 and it.snatched == 0 for it in items)
     return not all_zero
 
 
@@ -203,8 +201,7 @@ async def _fetch_pages(site, site_id: str, *, is_first_sync: bool):
         # 取整体最新（按发布时间），不假设站点一定严格倒序
         page_newest = max(items, key=lambda it: it.upload_time or datetime.min)
         if newest_item is None or (
-            (page_newest.upload_time or datetime.min)
-            > (newest_item.upload_time or datetime.min)
+            (page_newest.upload_time or datetime.min) > (newest_item.upload_time or datetime.min)
         ):
             newest_item = page_newest
 
@@ -217,11 +214,10 @@ async def _fetch_pages(site, site_id: str, *, is_first_sync: bool):
         if not trust:
             logger.warning(
                 "站点 %s 第 %d 页做种数据整页为 0，疑似解析异常，本页不刷新易变字段",
-                site_id, page_num,
+                site_id,
+                page_num,
             )
-        observations.extend(
-            _to_observation(site_id, it, trust_volatile=trust) for it in items
-        )
+        observations.extend(_to_observation(site_id, it, trust_volatile=trust) for it in items)
 
         if page_num == 1:
             first_page_all_new = not reached_known and len(ids) > 0
@@ -234,7 +230,8 @@ async def _fetch_pages(site, site_id: str, *, is_first_sync: bool):
         if page_num >= _MAX_BACKFILL_PAGES:
             logger.warning(
                 "站点 %s 回补达到上限 %d 页仍未接上已知区间，可能存在缺口（发布过快或宕机过久）",
-                site_id, _MAX_BACKFILL_PAGES,
+                site_id,
+                _MAX_BACKFILL_PAGES,
             )
             break
         oldest = min((it.upload_time for it in items if it.upload_time), default=None)
@@ -276,11 +273,14 @@ async def _sync_one_site(cred: SiteCredential) -> None:
         if observations:
             async with db.session() as session:
                 stats = await TorrentRepository(session).bulk_upsert(observations)
-                new_count = stats.inserted      # 此前不存在、首次入库的
-                updated_count = stats.updated   # 命中已有、刷新一遍的（复看）
+                new_count = stats.inserted  # 此前不存在、首次入库的
+                updated_count = stats.updated  # 命中已有、刷新一遍的（复看）
         logger.info(
             "站点 %s 同步完成：共观测 %d 条（新增 %d，刷新 %d）%s",
-            site_id, len(observations), new_count, updated_count,
+            site_id,
+            len(observations),
+            new_count,
+            updated_count,
             "（首刷建立基线）" if is_first_sync else "",
         )
     except Exception as exc:  # noqa: BLE001 -- 背景任务吞掉异常并记录可读原因
@@ -297,12 +297,16 @@ async def _sync_one_site(cred: SiteCredential) -> None:
     failures = 0 if error is None else prev_failures + 1
     tripped = error is not None and not transient and failures >= _BREAKER_THRESHOLD
     next_interval = _adapt_interval(
-        current_interval, new_count=new_count, full_page=full_page,
+        current_interval,
+        new_count=new_count,
+        full_page=full_page,
         consecutive_failures=failures,
     )
     if error is not None and transient:
         # 瞬时故障对用户是「不用管」的：把重试计划写进原因里，安抚而非报警
-        error += f"；将于约 {max(1, next_interval // 60)} 分钟后自动重试（已连续失败 {failures} 次）"
+        error += (
+            f"；将于约 {max(1, next_interval // 60)} 分钟后自动重试（已连续失败 {failures} 次）"
+        )
     if tripped:
         error += (
             f"；已连续失败 {failures} 次，同步已暂停。"
@@ -328,7 +332,8 @@ async def _sync_one_site(cred: SiteCredential) -> None:
     if tripped:
         logger.warning(
             "站点 %s 触发熔断：连续 %d 次非瞬时失败，已暂停同步并将站点标记为验证失败",
-            site_id, failures,
+            site_id,
+            failures,
         )
 
 
@@ -353,13 +358,13 @@ async def sync_site_torrents() -> None:
     if not due:
         # 明说"为什么没同步"：都没到期，以及最近一个还差多久——避免"看着像没干活"
         wait_hint = f"，最近一个约 {soonest_wait} 秒后" if soonest_wait is not None else ""
-        logger.info(
-            "本轮 tick：%d 个活跃站点均未到期%s", len(sites), wait_hint
-        )
+        logger.info("本轮 tick：%d 个活跃站点均未到期%s", len(sites), wait_hint)
         return
     logger.info(
         "本轮 tick：%d/%d 个站点到期，开始同步：%s",
-        len(due), len(sites), [c.site_id for c in due],
+        len(due),
+        len(sites),
+        [c.site_id for c in due],
     )
     for cred in due:
         await _sync_one_site(cred)

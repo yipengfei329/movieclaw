@@ -87,6 +87,21 @@ class TorrentFile(BaseModel):
     size_bytes: int
 
 
+class TorrentBrief(BaseModel):
+    """种子的轻量概览（list_torrents 的返回，下载监听导入按名称匹配用）。
+
+    ``content_name`` 是**磁盘上的落盘根目录/文件名**（qBittorrent 取
+    content_path 的末段，Transmission 与 name 相同）——监听目录里的条目名
+    就是它，按名称匹配天然免疫容器路径映射（save_path 视角差异）。
+    ``info_hash`` 供监听导入反查订阅工单：命中即继承投递时锚定的精确身份。
+    """
+
+    name: str
+    content_name: str
+    completed: bool
+    info_hash: str = ""
+
+
 class TorrentStatus(BaseModel):
     """下载任务的当前状态（get_torrent 的返回，入库管线的输入）。
 

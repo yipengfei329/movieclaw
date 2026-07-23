@@ -36,9 +36,7 @@ class DownloaderRepository:
 
     async def list_all(self) -> list[DownloaderClient]:
         """返回所有下载器（含已停用），按 id 排序保持添加顺序。"""
-        result = await self._session.execute(
-            select(DownloaderClient).order_by(DownloaderClient.id)
-        )
+        result = await self._session.execute(select(DownloaderClient).order_by(DownloaderClient.id))
         return list(result.scalars().all())
 
     async def get_default(self) -> DownloaderClient | None:

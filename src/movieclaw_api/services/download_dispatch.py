@@ -70,6 +70,13 @@ async def dispatch(
         subscription.library_id, subscription.kind
     )
     save_path = derive_save_path(library, title=item.title, year=item.year) if library else None
+    # 投递目录：库有监听导入规则 → 投到规则源目录（完成后监听导入按
+    # info_hash 认领身份搬进库）；没有 → 不传，落下载器默认目录（用户想
+    # 原地入库就把下载器默认目录设在库根，库扫描接管）。订阅止于投递，
+    # 不再亲自跟踪完成与搬运
+    from movieclaw_api.services.import_watch_config import resolve_dispatch_dir
+
+    dispatch_dir = await resolve_dispatch_dir(session, library.id if library else None)
     if library is not None and save_path is not None:
         target_text = f"；下载完成后将入库到「{library.name}」：{save_path}"
     else:
@@ -77,7 +84,7 @@ async def dispatch(
 
     if not dry_run:
         try:
-            submit_result = await _submit_real(session, candidate)
+            submit_result = await _submit_real(session, candidate, save_path=dispatch_dir)
         except Exception as exc:  # noqa: BLE001 -- 投递失败退回调度通道重试
             reason = f"{type(exc).__name__}: {exc}"
             await _rollback_claim(session, claimed, retry_delay=DISPATCH_RETRY_DELAY)
@@ -193,12 +200,15 @@ async def _rollback_claim(session: AsyncSession, claimed: list[WantedItem], *, r
     await session.commit()
 
 
-async def _submit_real(session: AsyncSession, candidate: TorrentCandidate):
+async def _submit_real(
+    session: AsyncSession, candidate: TorrentCandidate, *, save_path: str | None = None
+):
     """真实投递：委托公共编排（站点取种 → 默认下载器提交，幂等判重）。
 
-    下载本体落**下载器默认目录**（下载区继续做种），入库由整理器硬链完成
-    （L2.4 语义切换）。返回 SubmitResult 供调用方记录 infohash。
-    dry-run 关闭后才会走到这里。任何一步抛错由调用方统一回滚认领。
+    save_path 是监听导入规则的源目录（或 None 退下载器默认目录）——订阅
+    止于投递，完成后的搬运由监听导入按 info_hash 认领身份完成，库存对账
+    关闭工单。不传副标题：身份已由工单锚定，且线索只该锚条目级目录
+    （锚到监听目录会波及目录下全部条目）。
     """
     from movieclaw_api.services.torrent_submit import submit_torrent
 
@@ -207,9 +217,7 @@ async def _submit_real(session: AsyncSession, candidate: TorrentCandidate):
         site_id=candidate.site_id,
         download_url=candidate.download_url,
         tags=["movieclaw-sub"],
-        # 订阅路径身份在投递时已锚定、又不传 save_path，当前不会落线索；
-        # 带上副标题是为将来直投库目录时识别信号不断档
-        subtitle=candidate.subtitle,
+        save_path=save_path,
     )
     return result
 

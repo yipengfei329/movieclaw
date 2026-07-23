@@ -242,9 +242,7 @@ async def verify_llm_provider() -> None:
                 available = sorted(info.models)
             except Exception:  # noqa: BLE001
                 logger.info("端点未提供模型列表接口，跳过（不影响验证结论）")
-            logger.info(
-                "LLM 连接测试通过：%s / %s", preset.display_name, row.default_model
-            )
+            logger.info("LLM 连接测试通过：%s / %s", preset.display_name, row.default_model)
             await repo.update_status(ConfigStatus.ACTIVE, available_models=available)
         finally:
             await protocol.close()

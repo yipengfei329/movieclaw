@@ -111,9 +111,7 @@ async def push_cookies(
     site = catalog.find_by_domain(payload.domain)
     if site is None:
         logger.warning("插件推送的域名未匹配到受支持站点：域名=%s", payload.domain)
-        raise NotFoundException(
-            f"该域名未匹配到任何受支持的站点：{payload.domain}"
-        )
+        raise NotFoundException(f"该域名未匹配到任何受支持的站点：{payload.domain}")
 
     logger.info(
         "收到插件 Cookie 推送：域名=%s → 站点=%s（%s），共 %d 条 Cookie，开始保存并验证",

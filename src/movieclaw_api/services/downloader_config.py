@@ -36,9 +36,7 @@ class DownloaderConfigService:
     def _assert_not_verifying(row: DownloaderClient) -> None:
         """若下载器正在测试连接，拒绝当前操作（409）。"""
         if row.status == ConfigStatus.VERIFYING:
-            raise ConflictException(
-                f"下载器「{row.name}」正在测试连接，请等待完成后再操作"
-            )
+            raise ConflictException(f"下载器「{row.name}」正在测试连接，请等待完成后再操作")
 
     # -- 查询 --------------------------------------------------------------
 

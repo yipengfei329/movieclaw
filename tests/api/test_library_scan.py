@@ -97,6 +97,8 @@ async def db(tmp_path, monkeypatch):
     client = _fake_tmdb()
     monkeypatch.setattr(discover_mod, "get_tmdb_client", lambda: client)
     monkeypatch.setattr(scan_mod, "get_tmdb_client", lambda: client)
+    # 测试文件都是刚创建的，关掉"疑似写入中"静默窗口（该行为有专门测试覆盖）
+    monkeypatch.setattr(scan_mod, "NEW_FILE_QUIET_SECONDS", 0)
     yield get_database()
     await dispose_db()
     get_settings.cache_clear()

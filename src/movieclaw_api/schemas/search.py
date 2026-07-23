@@ -37,8 +37,8 @@ class SiteSearchStatus(BaseModel):
 
     site_id: str
     site_name: str
-    count: int                 # 该站命中条数
-    error: str | None = None   # 失败原因（可读中文）；成功为 None
+    count: int  # 该站命中条数
+    error: str | None = None  # 失败原因（可读中文）；成功为 None
     # 该站从发起到返回（或失败）的耗时。失败站的耗时尤其有诊断价值：
     # 十几秒后才失败的基本是超时，秒失败的多半是认证/解析问题。
     elapsed_ms: int | None = None
@@ -95,7 +95,7 @@ class SiteStreamResult(BaseModel):
     site_id: str
     site_name: str
     count: int
-    elapsed_ms: int             # 该站从发起到返回的耗时
+    elapsed_ms: int  # 该站从发起到返回的耗时
     items: list[TorrentHit]
 
 
@@ -104,7 +104,7 @@ class SiteStreamError(BaseModel):
 
     site_id: str
     site_name: str
-    error: str                  # 失败原因（可读中文）
+    error: str  # 失败原因（可读中文）
     elapsed_ms: int
 
 
@@ -112,7 +112,7 @@ class SearchStreamDone(BaseModel):
     """``done`` 事件：所有站点均已返回，给出整体汇总（口径同 ``SearchResponse.sites``）。"""
 
     total: int
-    elapsed_ms: int             # 整次搜索耗时（≈ 最慢站点耗时）
+    elapsed_ms: int  # 整次搜索耗时（≈ 最慢站点耗时）
     sites: list[SiteSearchStatus]
 
 
@@ -138,9 +138,7 @@ class PresetTabItem(BaseModel):
     categories: list[TorrentCategory] = Field(
         default_factory=list, description="勾选的一级分类；空 = 不限分类"
     )
-    site_ids: list[str] = Field(
-        default_factory=list, description="勾选的站点；空 = 全部可用站点"
-    )
+    site_ids: list[str] = Field(default_factory=list, description="勾选的站点；空 = 全部可用站点")
     poster_mode: bool = Field(
         default=False,
         description="图览模式：用该分类搜索时，结果页默认以图墙展示（结果页可临时切换）",
@@ -159,9 +157,7 @@ class PresetTabItem(BaseModel):
         return value
 
 
-SearchTabItem = Annotated[
-    CategoryTabItem | PresetTabItem, Field(discriminator="type")
-]
+SearchTabItem = Annotated[CategoryTabItem | PresetTabItem, Field(discriminator="type")]
 
 
 class SearchPreferencesView(BaseModel):
@@ -185,14 +181,14 @@ class SearchHistoryItem(BaseModel):
 
     id: int
     keyword: str
-    vertical: str               # 搜索垂直：torrent=站点资源 / media=影视条目（豆瓣）
-    label: str | None           # 展示名快照（分类中文名/预设名）；None=全部
-    categories: list[str]       # 分类组合快照；空=不限分类
-    site_ids: list[str]         # 站点组合快照；空=全部站点
-    poster_mode: bool           # 图览模式偏好（发起搜索时）；点历史重搜/看快照据此还原展示模式
-    search_count: int           # 累计搜索次数
+    vertical: str  # 搜索垂直：torrent=站点资源 / media=影视条目（豆瓣）
+    label: str | None  # 展示名快照（分类中文名/预设名）；None=全部
+    categories: list[str]  # 分类组合快照；空=不限分类
+    site_ids: list[str]  # 站点组合快照；空=全部站点
+    poster_mode: bool  # 图览模式偏好（发起搜索时）；点历史重搜/看快照据此还原展示模式
+    search_count: int  # 累计搜索次数
     last_searched_at: datetime  # 最近一次搜索时间（UTC）
-    has_snapshot: bool          # 是否已有结果快照（前端据此决定点击进快照预览还是直接重搜）
+    has_snapshot: bool  # 是否已有结果快照（前端据此决定点击进快照预览还是直接重搜）
 
     @field_serializer("last_searched_at")
     def _serialize_utc(self, value: datetime) -> str:
@@ -230,9 +226,9 @@ class SearchSnapshotView(BaseModel):
     history_id: int
     keyword: str
     label: str | None
-    categories: list[str]       # 分类组合快照；空=不限分类
-    site_ids: list[str]         # 站点组合快照；空=全部站点
-    snapshot_at: datetime       # 快照生成时间（UTC）
+    categories: list[str]  # 分类组合快照；空=不限分类
+    site_ids: list[str]  # 站点组合快照；空=全部站点
+    snapshot_at: datetime  # 快照生成时间（UTC）
     total: int
     # 当次搜索的整体耗时；老快照/阻塞版搜索没有该数据时为 None
     elapsed_ms: int | None = None
@@ -258,9 +254,9 @@ class MediaSearchSnapshotView(BaseModel):
 
     history_id: int
     keyword: str
-    snapshot_at: datetime       # 快照生成时间（UTC）
+    snapshot_at: datetime  # 快照生成时间（UTC）
     total: int
-    items: list[dict]           # 豆瓣条目快照（movieclaw_media.MediaSearchItem 的 dump）
+    items: list[dict]  # 豆瓣条目快照（movieclaw_media.MediaSearchItem 的 dump）
 
     @field_serializer("snapshot_at")
     def _serialize_utc(self, value: datetime) -> str:
