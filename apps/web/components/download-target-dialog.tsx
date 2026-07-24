@@ -14,6 +14,7 @@
  * 底部小字引导去「设置 → 下载器」配置路径映射。
  */
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { FolderIcon } from "@/components/icons";
@@ -262,9 +263,9 @@ export function DownloadTargetDialog({
 
           <p className="text-[11px] leading-relaxed text-[var(--text-faint)]">
             movieclaw 与下载器不在同一容器/主机、看到的路径不同？到
-            <a href="/settings/downloaders" className="mx-0.5 text-[var(--accent)] hover:underline">
+            <Link href="/settings/downloaders" className="mx-0.5 text-[var(--accent)] hover:underline">
               设置 → 下载器
-            </a>
+            </Link>
             配置路径映射，提交时会自动翻译成下载器视角。
           </p>
 
