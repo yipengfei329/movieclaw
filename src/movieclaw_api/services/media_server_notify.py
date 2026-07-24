@@ -14,6 +14,7 @@ import logging
 import httpx
 
 from movieclaw_api.core.config import get_settings
+from movieclaw_net import EgressScope, egress_transport
 
 logger = logging.getLogger("movieclaw_api.media_server_notify")
 
@@ -34,7 +35,9 @@ async def notify_media_server_refresh() -> bool:
         )
         return False
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        # LAN 范围：媒体服务器在内网，任何代理配置下都必须直连
+        transport = egress_transport("media_server", scope=EgressScope.LAN)
+        async with httpx.AsyncClient(timeout=10.0, transport=transport) as client:
             response = await client.post(
                 f"{url}/Library/Refresh",
                 headers={"X-Emby-Token": settings.media_server_token},

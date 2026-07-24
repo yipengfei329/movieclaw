@@ -27,6 +27,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from movieclaw_api.exceptions import BadRequestException, UpstreamServiceException
+from movieclaw_net import browser_tls_context, egress_transport, resolve_proxy_url
 
 logger = logging.getLogger("movieclaw_api.image_proxy")
 
@@ -90,6 +91,11 @@ class ImageProxy:
             pass
         else:
             raise BadRequestException("图片地址不允许直接使用 IP")
+        # 图片回源走代理时跳过本地 DNS 校验：被墙域名在本地可能解析失败或被
+        # 污染，而实际连接由代理端发起（CONNECT 隧道按域名转发），本地解析
+        # 结果既不可靠也不参与连接；内网防护责任随出口转移到用户的代理上
+        if resolve_proxy_url("image") is not None:
+            return host
         try:
             addresses = await self._resolve(host)
         except (socket.gaierror, OSError) as exc:
@@ -143,6 +149,16 @@ class ImageProxy:
                     response.raise_for_status()
                     content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
                     if not content_type.startswith("image/"):
+                        # 记录实际收到的内容，便于区分是图床反爬、代理返回错误页
+                        # 还是 DNS 劫持——这类问题只出现在部署环境，没日志查不了
+                        snippet = (await response.aread())[:200]
+                        logger.warning(
+                            "远端返回非图片内容：%s status=%s content-type=%s 响应体前 200 字节=%r",
+                            current,
+                            response.status_code,
+                            content_type or "（缺失）",
+                            snippet,
+                        )
                         raise UpstreamServiceException("远端地址返回的内容不是图片")
                     declared_size = int(response.headers.get("content-length") or 0)
                     if declared_size > self._max_bytes:
@@ -175,6 +191,10 @@ def get_image_proxy() -> ImageProxy:
     if _proxy is None:
         _proxy = ImageProxy(
             headers_by_host={"doubanio.com": {"Referer": "https://m.douban.com/"}},
+            # 统一出口：服务标签 image，代理路由/熔断由 movieclaw_net 按配置接管。
+            # TLS 用浏览器特征上下文：豆瓣图床的 EdgeOne 边缘按 TLS 指纹拦
+            # Python 默认配置（返回 JS 挑战页），详见 browser_tls_context 注释。
+            transport=egress_transport("image", verify=browser_tls_context()),
         )
     return _proxy
 

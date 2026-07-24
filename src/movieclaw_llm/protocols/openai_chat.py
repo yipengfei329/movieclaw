@@ -16,6 +16,7 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
+import httpx
 import openai
 from openai import AsyncOpenAI
 
@@ -42,6 +43,7 @@ from movieclaw_llm.models import (
     TokenUsage,
     ToolCall,
 )
+from movieclaw_net import egress_transport
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +68,10 @@ class OpenAIChatProtocol(BaseLlmProtocol):
             kwargs["base_url"] = base_url
         if config.timeout_seconds is not None:
             kwargs["timeout"] = config.timeout_seconds
+        # 统一出口：底层 httpx 客户端注入服务标签 llm 的出口 transport，
+        # 用户可在「设置 → 网络」让 LLM 请求走代理（OpenAI 官方等被墙端点）。
+        # 超时仍由 AsyncOpenAI 的 timeout 参数按请求控制，这里不重复设置。
+        kwargs["http_client"] = httpx.AsyncClient(transport=egress_transport("llm"))
         self._client = AsyncOpenAI(**kwargs)
 
     # -- 请求转换 -----------------------------------------------------------

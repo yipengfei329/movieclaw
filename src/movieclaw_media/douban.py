@@ -50,6 +50,20 @@ class DoubanError(Exception):
     """豆瓣榜单请求失败；错误信息可直接展示给用户。"""
 
 
+class DoubanNetworkError(DoubanError):
+    """网络层面无法连通豆瓣（连接失败/超时/熔断），与"豆瓣可达但返回错误"区分。"""
+
+
+def _translate_httpx_error(exc: Exception, what: str) -> DoubanError:
+    """httpx 异常 → 豆瓣领域错误：传输层失败给网络引导，其余给通用重试提示。"""
+    if isinstance(exc, httpx.TransportError):
+        return DoubanNetworkError(
+            f"无法连通豆瓣（{what}）。请检查服务器网络；"
+            "如所在网络不通，可在「设置 → 网络」为豆瓣配置代理或反代地址"
+        )
+    return DoubanError(f"访问豆瓣{what}失败，请稍后重试")
+
+
 class DoubanClient:
     """只访问 subject_collection 榜单接口的低频 HTTP 客户端。"""
 
@@ -92,7 +106,7 @@ class DoubanClient:
                 return response.json()
             except (httpx.HTTPError, ValueError) as exc:
                 logger.warning("豆瓣榜单请求失败：%s（%s）", collection_id, exc)
-                raise DoubanError("访问豆瓣榜单失败，请稍后重试") from exc
+                raise _translate_httpx_error(exc, "榜单") from exc
 
         return await self._swr.get_or_fetch(
             f"collection:{collection_id}:{count}",
@@ -112,7 +126,7 @@ class DoubanClient:
             response.raise_for_status()
         except httpx.HTTPError as exc:
             logger.warning("豆瓣搜索请求失败：%s（%s）", keyword, exc)
-            raise DoubanError("访问豆瓣搜索失败，请稍后重试") from exc
+            raise _translate_httpx_error(exc, "搜索") from exc
 
         selector = Selector(text=response.text)
         results: list[dict[str, Any]] = []
@@ -149,7 +163,7 @@ class DoubanClient:
                 data = response.json()
             except (httpx.HTTPError, ValueError) as exc:
                 logger.warning("豆瓣详情请求失败：%s（%s）", douban_id, exc)
-                raise DoubanError("访问豆瓣详情失败，请稍后重试") from exc
+                raise _translate_httpx_error(exc, "详情") from exc
             # 返回 None 触发负缓存：豆瓣确认无此条目与瞬时故障（抛异常）分开对待
             if not data.get("id") or not data.get("title"):
                 return None

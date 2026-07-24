@@ -17,6 +17,7 @@ from movieclaw_api.exceptions import (
     AppException,
     NotFoundException,
     UpstreamServiceException,
+    UpstreamUnreachableException,
 )
 from movieclaw_api.schemas.response import ApiResponse, ok
 from movieclaw_api.services.media_discover import get_douban_media_service, get_media_service
@@ -25,10 +26,12 @@ from movieclaw_db.repositories.search_history_repo import SearchHistoryRepositor
 from movieclaw_media import (
     DiscoverPage,
     DoubanError,
+    DoubanNetworkError,
     MediaDetail,
     MediaKind,
     MediaSearchItem,
     TmdbError,
+    TmdbNetworkError,
     TmdbNotFoundError,
 )
 
@@ -45,9 +48,25 @@ class DiscoverSource(StrEnum):
 
 
 def _translate(exc: TmdbError | DoubanError) -> AppException:
-    """上游影视数据错误 → API 统一异常（message 已是面向用户的中文）。"""
+    """上游影视数据错误 → API 统一异常（message 已是面向用户的中文）。
+
+    网络级不可达（含熔断快速失败）给结构化的 UPSTREAM_UNREACHABLE：
+    前端据此渲染「原因说明 + 跳转网络设置」的引导错误态。
+    """
     if isinstance(exc, TmdbNotFoundError):
         return NotFoundException(str(exc))
+    if isinstance(exc, TmdbNetworkError):
+        return UpstreamUnreachableException(
+            str(exc),
+            service="tmdb",
+            hint="到「设置 → 网络」为 TMDB 配置代理或镜像地址，保存后用连通性测试验证",
+        )
+    if isinstance(exc, DoubanNetworkError):
+        return UpstreamUnreachableException(
+            str(exc),
+            service="douban",
+            hint="到「设置 → 网络」为豆瓣配置代理或反代地址，保存后用连通性测试验证",
+        )
     return UpstreamServiceException(str(exc))
 
 

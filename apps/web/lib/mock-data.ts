@@ -8,6 +8,7 @@ import {
   DownloadIcon,
   FilmIcon,
   FolderIcon,
+  GlobeIcon,
   PaletteIcon,
   PuzzleIcon,
   SearchIcon,
@@ -136,6 +137,7 @@ export const settingsSectionGroups: SettingsSectionGroup[] = [
   {
     label: "系统",
     items: [
+      { id: "network", label: "网络与代理", description: "外部服务的代理与镜像地址，解决 TMDB 等不可达", icon: GlobeIcon },
       { id: "logs", label: "系统日志", description: "后端运行日志，按天存档", icon: TerminalIcon },
     ],
   },

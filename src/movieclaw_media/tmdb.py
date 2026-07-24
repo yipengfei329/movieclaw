@@ -58,6 +58,14 @@ class TmdbNotFoundError(TmdbError):
     """请求的条目在 TMDB 中不存在。"""
 
 
+class TmdbNetworkError(TmdbError):
+    """网络层面无法连通 TMDB（连接失败/超时/熔断）。
+
+    与"TMDB 可达但返回错误"区分开：API 层据此产出结构化的
+    UPSTREAM_UNREACHABLE 错误，引导用户去「设置 → 网络」配置代理/镜像。
+    """
+
+
 class TmdbClient:
     """TMDB HTTP 客户端：只负责「带认证地发 GET 并把错误翻译成中文」。
 
@@ -71,9 +79,13 @@ class TmdbClient:
         *,
         base_url: str = DEFAULT_API_BASE_URL,
         timeout: float = 15.0,
+        max_attempts: int = 3,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
+        # 重试档位：后台任务用默认 3 次；发现页等用户在等的交互路径应传更小
+        # 的 timeout/max_attempts，配合出口层熔断把失败反馈压到秒级
+        self._max_attempts = max(1, max_attempts)
         # v4 Read Access Token 是 JWT（"eyJ" 开头），走 Bearer 头；
         # 其余按 v3 API Key 处理，走 api_key 查询参数
         self._use_bearer = api_key.startswith("eyJ")
@@ -97,9 +109,9 @@ class TmdbClient:
             response = await self._request(url, query)
         except httpx.HTTPError as exc:
             logger.warning("TMDB 请求失败：%s %s（%s）", path, type(exc).__name__, exc)
-            raise TmdbError(
-                "访问 TMDB 失败（网络错误）。请检查服务器能否连通 api.themoviedb.org；"
-                "若所在网络无法直连，可通过 TMDB_API_BASE_URL 配置可用的镜像/代理地址"
+            raise TmdbNetworkError(
+                "无法连通 TMDB（api.themoviedb.org）。所在网络可能无法直连，"
+                "请到「设置 → 网络」配置代理或镜像地址，并用连通性测试验证"
             ) from exc
 
         if response.status_code == 401:
@@ -111,15 +123,19 @@ class TmdbClient:
             raise TmdbError(f"TMDB 服务返回异常状态码 {response.status_code}，请稍后重试")
         return response.json()
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential_jitter(initial=1, max=8, jitter=1),
-        retry=retry_if_exception_type(_TRANSIENT_EXCEPTIONS),
-        reraise=True,
-    )
     async def _request(self, url: str, params: dict[str, Any]) -> httpx.Response:
-        async with self._limiter:
-            return await self._client.get(url, params=params)
+        # 重试次数随实例配置，故装饰器在调用期构造（与 movieclaw_tracker.http 同款写法）
+        @retry(
+            stop=stop_after_attempt(self._max_attempts),
+            wait=wait_exponential_jitter(initial=1, max=8, jitter=1),
+            retry=retry_if_exception_type(_TRANSIENT_EXCEPTIONS),
+            reraise=True,
+        )
+        async def _do() -> httpx.Response:
+            async with self._limiter:
+                return await self._client.get(url, params=params)
+
+        return await _do()
 
     async def aclose(self) -> None:
         """关闭底层连接池（应用关闭时由 lifespan 调用）。"""

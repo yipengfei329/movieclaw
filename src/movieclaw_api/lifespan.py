@@ -68,6 +68,10 @@ def build_lifespan(settings: Settings):
         # 返回默认值，不会报错（这是"空库也能启动、进引导页"的关键红线）。
         init_secret_box(settings.master_key, Path(settings.secret_key_file))
         init_setting_store()
+        # 加载网络出口配置（代理路由/镜像地址）：须在任何出网客户端首次构造前生效
+        from movieclaw_api.services.network_egress import load_network_egress
+
+        await load_network_egress()
         # 加载站点目录（sites/configs/*.yaml → registry），供"可选项"接口使用
         load_all_sites()
         # 初始化站点访问管理器：进程级单例，持有每站已认证的共享客户端。

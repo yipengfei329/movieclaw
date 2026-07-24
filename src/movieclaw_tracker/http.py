@@ -11,6 +11,7 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
+from movieclaw_net import egress_transport
 from movieclaw_tracker.ratelimit import SiteRateLimiter, get_site_limiter
 
 logger = logging.getLogger("movieclaw_tracker.http")
@@ -48,6 +49,7 @@ class HttpClient:
         http2: bool = False,
         site_id: str | None = None,
         min_request_interval: float | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._max_retries = max_retries
         # 每站限流器：给了 site_id 才启用（跨临时客户端按 site_id 全进程共享同一闸门）。
@@ -55,6 +57,11 @@ class HttpClient:
         self._limiter: SiteRateLimiter | None = (
             get_site_limiter(site_id, min_request_interval) if site_id else None
         )
+        # 统一出口：有 site_id 的正式客户端默认走 movieclaw_net 出口层
+        # （标签 site:<id>，用户可在「设置 → 网络」按站点选择是否走代理）；
+        # 测试注入的 transport 优先，未给 site_id 时保持直连行为
+        if transport is None and site_id:
+            transport = egress_transport(f"site:{site_id}", http2=http2)
         merged_headers = {**_DEFAULT_HEADERS, **(headers or {})}
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(timeout),
@@ -62,6 +69,7 @@ class HttpClient:
             cookies=cookies,
             http2=http2,
             follow_redirects=True,
+            transport=transport,
         )
 
     @property

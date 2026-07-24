@@ -9,6 +9,7 @@ import { DownloaderConfigSection } from "@/components/downloader-config-section"
 import { ExtensionSection } from "@/components/extension-settings";
 import { ImportWatchSection } from "@/components/import-watch-section";
 import { LlmConfigSection } from "@/components/llm-config-section";
+import { NetworkConfigSection } from "@/components/network-config-section";
 import { SearchSection } from "@/components/search-settings";
 import { SiteConfigSection } from "@/components/site-config-section";
 import { SystemLogsSection } from "@/components/system-logs-section";
@@ -67,12 +68,13 @@ export function SettingsSidebar({ active, onSelect, onBack }: SettingsSidebarPro
         <p className="mt-1 text-xs text-[var(--text-muted)]">管理账号与工作台偏好</p>
       </div>
 
-      {/* 分区列表：与工作台侧栏同语言——icon-chip 徽标 + 选中亮胶囊，按组分节 */}
+      {/* 分区列表：标准 SaaS 设置菜单——紧凑单行（小图标内联 + 标签），
+          描述只在右侧面板头部展示，选中态仍用亮胶囊表达 */}
       <nav className="scroll-thin flex-1 space-y-4 overflow-y-auto px-3 pb-4">
         {settingsSectionGroups.map((group) => (
           <div key={group.label}>
             <h3 className="group-label mb-1.5 px-2">{group.label}</h3>
-            <div className="space-y-1">
+            <div className="space-y-0.5">
               {group.items.map((section) => {
                 const Icon = section.icon;
                 return (
@@ -81,18 +83,11 @@ export function SettingsSidebar({ active, onSelect, onBack }: SettingsSidebarPro
                     type="button"
                     data-active={active === section.id}
                     onClick={() => onSelect(section.id)}
-                    className="glass-row nav-item px-2 py-2"
+                    className="glass-row nav-item gap-2.5 px-2.5 py-[7px]"
                   >
-                    <span className="icon-chip size-9">
-                      <Icon className="size-[18px]" />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-[13px] font-semibold text-[var(--text)]">
-                        {section.label}
-                      </span>
-                      <span className="block truncate text-[11px] text-[var(--text-muted)]">
-                        {section.description}
-                      </span>
+                    <Icon className="size-4 shrink-0" />
+                    <span className="truncate text-[13px] font-medium">
+                      {section.label}
                     </span>
                   </button>
                 );
@@ -163,6 +158,8 @@ export function SettingsPanel({ active }: SettingsPanelProps) {
           <LlmConfigSection />
         ) : section.id === "extension" ? (
           <ExtensionSection />
+        ) : section.id === "network" ? (
+          <NetworkConfigSection />
         ) : section.id === "logs" ? (
           <SystemLogsSection />
         ) : (

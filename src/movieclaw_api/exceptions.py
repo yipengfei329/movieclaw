@@ -89,6 +89,23 @@ class UpstreamServiceException(AppException):
         )
 
 
+class UpstreamUnreachableException(AppException):
+    """上游服务在网络层面不可达（连接失败/超时/熔断）。
+
+    与 ``UpstreamServiceException``（服务可达但出错）区分：本异常携带结构化的
+    service 与 hint，前端据 code=UPSTREAM_UNREACHABLE 渲染引导式错误态
+    （说明原因 + 跳转「设置 → 网络」），而不是一句裸的 502。
+    """
+
+    def __init__(self, message: str, *, service: str, hint: str) -> None:
+        super().__init__(
+            status_code=502,
+            code="UPSTREAM_UNREACHABLE",
+            message=message,
+            details=[{"service": service, "hint": hint}],
+        )
+
+
 class ConflictException(AppException):
     def __init__(
         self,

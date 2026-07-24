@@ -16,7 +16,12 @@
 - cache.py   进程内 TTL 缓存
 """
 
-from movieclaw_media.douban import DoubanClient, DoubanDiscoverService, DoubanError
+from movieclaw_media.douban import (
+    DoubanClient,
+    DoubanDiscoverService,
+    DoubanError,
+    DoubanNetworkError,
+)
 from movieclaw_media.library import (
     DoubanResolution,
     MediaProfile,
@@ -42,6 +47,7 @@ from movieclaw_media.tmdb import (
     TmdbAuthError,
     TmdbClient,
     TmdbError,
+    TmdbNetworkError,
     TmdbNotConfiguredError,
     TmdbNotFoundError,
 )
@@ -59,6 +65,7 @@ __all__ = [
     "DoubanClient",
     "DoubanDiscoverService",
     "DoubanError",
+    "DoubanNetworkError",
     "DoubanResolution",
     "MediaProfile",
     "ResolveCandidate",
@@ -70,6 +77,7 @@ __all__ = [
     "TmdbAuthError",
     "TmdbClient",
     "TmdbError",
+    "TmdbNetworkError",
     "TmdbNotConfiguredError",
     "TmdbNotFoundError",
 ]

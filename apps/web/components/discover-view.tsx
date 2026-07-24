@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Route } from "next";
 
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
+  GlobeIcon,
   InfoIcon,
   PlayIcon,
   StarIcon,
@@ -14,6 +16,7 @@ import {
 import { MediaRow } from "@/components/media-row";
 import { PosterImage } from "@/components/poster-image";
 import { fetchDiscoverPage } from "@/lib/api/discover";
+import { HttpError } from "@/lib/http";
 import { useMediaDetail } from "@/lib/media-detail";
 import type {
   DiscoverPageData,
@@ -35,6 +38,30 @@ import type {
  */
 const pageCache = new Map<string, DiscoverPageData>();
 
+/** 加载失败信息：除文案外带上后端错误码与引导提示，驱动引导式错误态。 */
+interface DiscoverErrorInfo {
+  message: string;
+  /** 后端统一错误码（如 UPSTREAM_UNREACHABLE = 网络级不可达） */
+  code?: string;
+  /** 后端给的下一步操作提示（如去网络设置配代理） */
+  hint?: string;
+}
+
+/** 从任意异常提取结构化错误信息（HttpError 携带后端信封的 code/details）。 */
+function toErrorInfo(err: unknown): DiscoverErrorInfo {
+  if (err instanceof HttpError) {
+    const payload = err.details as
+      | { code?: string; details?: { service?: string; hint?: string }[] }
+      | undefined;
+    return {
+      message: err.message,
+      code: payload?.code,
+      hint: payload?.details?.[0]?.hint,
+    };
+  }
+  return { message: (err as Error)?.message || "加载失败，请稍后重试" };
+}
+
 export function DiscoverView({
   mediaType,
   source,
@@ -47,7 +74,7 @@ export function DiscoverView({
   const [page, setPage] = useState<DiscoverPageData | null>(
     () => pageCache.get(cacheKey) ?? null,
   );
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<DiscoverErrorInfo | null>(null);
   // 重试计数器：点「重试」时 +1，触发 effect 重新拉取
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -63,8 +90,8 @@ export function DiscoverView({
         pageCache.set(cacheKey, data);
         if (!cancelled) setPage(data);
       })
-      .catch((err: Error) => {
-        if (!cancelled) setError(err.message || "加载失败，请稍后重试");
+      .catch((err: unknown) => {
+        if (!cancelled) setError(toErrorInfo(err));
       });
     return () => {
       cancelled = true;
@@ -87,7 +114,7 @@ export function DiscoverView({
     return (
       <div className="flex flex-1 flex-col">
         {toolbar}
-        <DiscoverError message={error} onRetry={() => setReloadKey((k) => k + 1)} />
+        <DiscoverError error={error} onRetry={() => setReloadKey((k) => k + 1)} />
       </div>
     );
   }
@@ -175,20 +202,45 @@ function DiscoverSkeleton() {
   );
 }
 
-/** 加载失败态：展示后端的中文错误信息（如未配置 TMDB Key 的引导）并提供重试。 */
-function DiscoverError({ message, onRetry }: { message: string; onRetry: () => void }) {
+/** 加载失败态：展示后端的中文错误信息（如未配置 TMDB Key 的引导）并提供重试。
+ *
+ * 网络级不可达（UPSTREAM_UNREACHABLE，含熔断快速失败）渲染引导式错误：
+ * 说明原因 + 后端 hint + 「前往网络设置」按钮，替代干等骨架屏。
+ */
+function DiscoverError({ error, onRetry }: { error: DiscoverErrorInfo; onRetry: () => void }) {
+  const unreachable = error.code === "UPSTREAM_UNREACHABLE";
   return (
     <div className="flex flex-1 items-center justify-center px-6">
       <div className="max-w-md rounded-2xl border border-white/[0.07] bg-[rgba(14,16,22,0.45)] p-8 text-center backdrop-blur-xl">
-        <p className="text-[15px] font-semibold text-[var(--text)]">发现页加载失败</p>
-        <p className="mt-2 break-all text-[13px] leading-6 text-[var(--text-muted)]">{message}</p>
-        <button
-          type="button"
-          onClick={onRetry}
-          className="btn-accent mt-5 h-9 rounded-full px-5 text-[13px] font-semibold"
-        >
-          重试
-        </button>
+        {unreachable && (
+          <span className="icon-chip mx-auto mb-4 flex size-11 !rounded-2xl">
+            <GlobeIcon className="size-5" />
+          </span>
+        )}
+        <p className="text-[15px] font-semibold text-[var(--text)]">
+          {unreachable ? "无法连接数据源" : "发现页加载失败"}
+        </p>
+        <p className="mt-2 break-all text-[13px] leading-6 text-[var(--text-muted)]">{error.message}</p>
+        {unreachable && error.hint && (
+          <p className="mt-2 text-[12px] leading-6 text-[var(--text-faint)]">{error.hint}</p>
+        )}
+        <div className="mt-5 flex items-center justify-center gap-3">
+          {unreachable && (
+            <Link
+              href={"/settings/network" as Route}
+              className="btn-accent flex h-9 items-center rounded-full px-5 text-[13px] font-semibold"
+            >
+              前往网络设置
+            </Link>
+          )}
+          <button
+            type="button"
+            onClick={onRetry}
+            className={`${unreachable ? "btn-glass" : "btn-accent"} h-9 rounded-full px-5 text-[13px] font-semibold`}
+          >
+            重试
+          </button>
+        </div>
       </div>
     </div>
   );

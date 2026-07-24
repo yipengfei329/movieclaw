@@ -29,6 +29,10 @@ from movieclaw_api.settings.base import (
     list_descriptors,
     register_setting,
 )
+from movieclaw_api.settings.network import (
+    BUILTIN_EGRESS_SERVICES,
+    NetworkEgressSetting,
+)
 from movieclaw_api.settings.schemas import (
     AdminAccountSetting,
     ExtensionSyncSetting,
@@ -73,4 +77,7 @@ __all__ = [
     # 超级管理员账号与登录会话
     "AdminAccountSetting",
     "SessionSecretSetting",
+    # 网络与代理
+    "NetworkEgressSetting",
+    "BUILTIN_EGRESS_SERVICES",
 ]

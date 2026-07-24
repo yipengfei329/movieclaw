@@ -8,6 +8,11 @@ movieclaw_media 是不感知配置来源的独立领域包（不 import moviecla
 from __future__ import annotations
 
 from movieclaw_api.core.config import get_settings
+from movieclaw_api.services.network_egress import (
+    effective_douban_api_base_url,
+    effective_tmdb_api_base_url,
+    effective_tmdb_image_base_url,
+)
 from movieclaw_db.stores import SqlCacheStore
 from movieclaw_media import (
     DoubanClient,
@@ -16,6 +21,7 @@ from movieclaw_media import (
     TmdbClient,
     TmdbNotConfiguredError,
 )
+from movieclaw_net import browser_tls_context, egress_transport
 
 _service: MediaDiscoverService | None = None
 _douban_service: DoubanDiscoverService | None = None
@@ -36,7 +42,11 @@ def get_tmdb_client() -> TmdbClient:
                 "尚未配置 TMDB API Key，订阅功能不可用。请在 .env（或环境变量）中设置 "
                 "TMDB_API_KEY 后重启服务；Key 可在 themoviedb.org 的账户设置 → API 页免费申请"
             )
-        _tmdb_client = TmdbClient(settings.tmdb_api_key, base_url=settings.tmdb_api_base_url)
+        _tmdb_client = TmdbClient(
+            settings.tmdb_api_key,
+            base_url=effective_tmdb_api_base_url(),
+            transport=egress_transport("tmdb"),
+        )
     return _tmdb_client
 
 
@@ -51,8 +61,16 @@ def get_media_service() -> MediaDiscoverService:
                 "TMDB_API_KEY 后重启服务；Key 可在 themoviedb.org 的账户设置 → API 页免费申请"
             )
         _service = MediaDiscoverService(
-            TmdbClient(settings.tmdb_api_key, base_url=settings.tmdb_api_base_url),
-            image_base_url=settings.tmdb_image_base_url,
+            # 交互档位：发现页是用户在等的请求，超时/重试压小；线路不通时由
+            # 出口层熔断器把后续失败压到毫秒级，前端立刻拿到引导错误
+            TmdbClient(
+                settings.tmdb_api_key,
+                base_url=effective_tmdb_api_base_url(),
+                timeout=8.0,
+                max_attempts=2,
+                transport=egress_transport("tmdb"),
+            ),
+            image_base_url=effective_tmdb_image_base_url(),
             language=settings.tmdb_language,
             region=settings.tmdb_region,
         )
@@ -63,10 +81,15 @@ def get_douban_media_service() -> DoubanDiscoverService:
     """取豆瓣榜单服务单例；它不依赖 TMDB API Key。"""
     global _douban_service
     if _douban_service is None:
-        settings = get_settings()
         # 注入 SQLite 持久缓存：豆瓣榜单/详情跨重启不丢，冷启动不再突发回源
         _douban_service = DoubanDiscoverService(
-            DoubanClient(base_url=settings.douban_api_base_url, store=SqlCacheStore())
+            DoubanClient(
+                base_url=effective_douban_api_base_url(),
+                store=SqlCacheStore(),
+                # 豆瓣 API 域名同样落在腾讯云节点上，防御性使用浏览器 TLS 指纹，
+                # 避免部分边缘节点按 JA3 拦截 Python 默认配置（同图片代理的修复）
+                transport=egress_transport("douban", verify=browser_tls_context()),
+            )
         )
     return _douban_service
 

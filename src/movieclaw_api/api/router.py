@@ -27,6 +27,7 @@ from movieclaw_api.api.routes.import_watch import router as import_watch_router
 from movieclaw_api.api.routes.libraries import router as libraries_router
 from movieclaw_api.api.routes.llm import router as llm_router
 from movieclaw_api.api.routes.logs import router as logs_router
+from movieclaw_api.api.routes.network import router as network_router
 from movieclaw_api.api.routes.rule_sets import router as rule_sets_router
 from movieclaw_api.api.routes.search import router as search_router
 from movieclaw_api.api.routes.sites import router as sites_router
@@ -61,6 +62,7 @@ _PROTECTED_ROUTERS = [
     fs_router,
     rule_sets_router,
     logs_router,
+    network_router,
 ]
 for _router in _PROTECTED_ROUTERS:
     api_router.include_router(_router, dependencies=[Depends(require_login)])
