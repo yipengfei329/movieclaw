@@ -23,7 +23,9 @@
 # ---------------------------------------------------------------------------
 # 阶段 1：前端构建（含浏览器扩展 zip，供设置页下载）
 # ---------------------------------------------------------------------------
-FROM node:22-bookworm-slim AS web-builder
+# 前端产物是纯 JS（images.unoptimized 已去掉 sharp 原生依赖），跨架构通用，
+# 因此固定在构建机原生架构上跑，交叉构建时不经过 QEMU 模拟（快一个数量级）。
+FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS web-builder
 ARG NPM_REGISTRY=https://registry.npmjs.org
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm install -g pnpm@10
@@ -53,7 +55,8 @@ RUN python -c "import tomllib; deps = tomllib.load(open('pyproject.toml', 'rb'))
 # ---------------------------------------------------------------------------
 # 阶段 3：NER 模型（从 GitHub Release 下载，烧进镜像作为默认模型）
 # ---------------------------------------------------------------------------
-FROM debian:bookworm-slim AS ner-model
+# 模型文件与架构无关，同样跑在构建机原生架构上
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS ner-model
 ARG NER_MODEL_BASE=https://github.com/yipengfei329/movieclaw/releases/download/torrent-ner-v1
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates \
@@ -65,7 +68,12 @@ RUN mkdir -p /model \
     && curl -fSL --retry 3 -O "$NER_MODEL_BASE/labels.json"
 
 # ---------------------------------------------------------------------------
-# 阶段 4：运行镜像
+# 阶段 4：目标架构的 node 二进制来源
+# ---------------------------------------------------------------------------
+FROM node:22-bookworm-slim AS node-dist
+
+# ---------------------------------------------------------------------------
+# 阶段 5：运行镜像
 # ---------------------------------------------------------------------------
 FROM python:3.12-slim-bookworm
 
@@ -74,8 +82,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends libstdc++6 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Node 运行时：只拷贝 node 二进制（跑 Next standalone server 足够），不装 npm
-COPY --from=web-builder /usr/local/bin/node /usr/local/bin/node
+# Node 运行时：只拷贝 node 二进制（跑 Next standalone server 足够），不装 npm。
+# 注意必须取自目标架构的 node 镜像（web-builder 是构建机架构，二进制不通用）。
+COPY --from=node-dist /usr/local/bin/node /usr/local/bin/node
 
 WORKDIR /app
 
@@ -89,6 +98,10 @@ COPY alembic.ini ./
 COPY --from=web-builder /build/apps/web/.next/standalone ./web
 COPY --from=web-builder /build/apps/web/.next/static ./web/apps/web/.next/static
 COPY --from=web-builder /build/apps/web/public ./web/apps/web/public
+# 图片优化已关闭（images.unoptimized），sharp 永不加载；但 Next 只要能解析到就会
+# 把它塞进 standalone——它是构建机架构的原生二进制，在目标架构上是错的，删掉。
+RUN rm -rf ./web/node_modules/.pnpm/@img* ./web/node_modules/.pnpm/sharp@* \
+    ./web/node_modules/@img ./web/node_modules/sharp
 
 # NER 模型：镜像内只读目录，不占用户的 data 卷；MOVIECLAW_NER_DIR 指过来
 COPY --from=ner-model /model ./models/torrent-ner

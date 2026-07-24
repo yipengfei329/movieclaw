@@ -13,6 +13,10 @@ const nextConfig: NextConfig = {
   distDir: process.env.NEXT_DIST_DIR?.trim() || ".next",
   // Docker 部署用 standalone 输出：只带被引用到的依赖，镜像里无需完整 node_modules。
   output: "standalone",
+  // 关闭 Next 图片优化：站内 next/image 只用于静态 logo，优化收益为零；
+  // 关闭后 standalone 产物不再依赖 sharp 原生模块，前端构建产物跨 CPU 架构通用
+  // （Docker 交叉构建时前端可在宿主架构原生编译，不必走 QEMU 模拟）。
+  images: { unoptimized: true },
   reactStrictMode: true,
   typedRoutes: true,
   // 关闭左下角 Next.js 开发指示器（dev tools 浮动按钮）
