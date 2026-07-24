@@ -18,6 +18,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { FolderIcon } from "@/components/icons";
+import { Modal } from "@/components/modal";
 import {
   listDownloaders,
   submitTorrentDownload,
@@ -202,21 +203,8 @@ export function DownloadTargetDialog({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-6"
-      role="dialog"
-      aria-modal="true"
-      aria-label="选择保存位置"
-      onClick={(e) => e.stopPropagation()}
-    >
-      <button
-        type="button"
-        aria-label="关闭"
-        onClick={onClose}
-        className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm"
-      />
-      <div className="relative w-full max-w-md overflow-hidden rounded-2xl border border-white/10 bg-[rgba(16,18,26,0.92)] shadow-[0_32px_90px_rgba(0,0,0,0.7)] backdrop-blur-2xl">
-        <div className="space-y-4 p-6">
+    <Modal open onClose={onClose} label="选择保存位置">
+      <div className="space-y-4 p-6">
           <h2 className="text-[17px] font-bold text-white">选择保存位置</h2>
 
           {error && (
@@ -282,8 +270,7 @@ export function DownloadTargetDialog({
               {busy ? "提交中…" : "确认下载"}
             </button>
           </div>
-        </div>
       </div>
-    </div>
+    </Modal>
   );
 }

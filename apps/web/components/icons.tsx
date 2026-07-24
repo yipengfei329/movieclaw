@@ -264,6 +264,14 @@ export const TerminalIcon = (p: IconProps) => (
   </Base>
 );
 
+export const GlobeIcon = (p: IconProps) => (
+  <Base {...p}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M3 12h18" />
+    <path d="M12 3c2.6 2.5 4 5.6 4 9s-1.4 6.5-4 9c-2.6-2.5-4-5.6-4-9s1.4-6.5 4-9Z" />
+  </Base>
+);
+
 export const ServerIcon = (p: IconProps) => (
   <Base {...p}>
     <rect x="3" y="4" width="18" height="7" rx="2" />
@@ -283,5 +291,23 @@ export const DownloadIcon = (p: IconProps) => (
     <path d="M12 4v11" />
     <path d="m7 11 5 4 5-4" />
     <path d="M4 19h16" />
+  </Base>
+);
+
+export const ExpandIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M15 4h5v5" />
+    <path d="M20 4l-6 6" />
+    <path d="M9 20H4v-5" />
+    <path d="m4 20 6-6" />
+  </Base>
+);
+
+export const ShrinkIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M20 9h-5V4" />
+    <path d="m15 9 6-6" />
+    <path d="M4 15h5v5" />
+    <path d="M9 15l-6 6" />
   </Base>
 );

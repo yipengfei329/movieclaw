@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { DirectoryPicker } from "@/components/directory-picker";
 import { FolderIcon, PlusIcon, XIcon } from "@/components/icons";
+import { Modal } from "@/components/modal";
 import { type ConfiguredDownloader, listDownloaders } from "@/lib/api/downloaders";
 import {
   type ImportWatchRule,
@@ -205,13 +206,6 @@ function RuleFormDialog({
     setPickerOpen(false);
   }, [state, rule, libraries]);
 
-  useEffect(() => {
-    if (state === null) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [state, onClose]);
-
   if (state === null) return null;
 
   const canSubmit = !busy && sourcePath.length > 0 && libraryId !== null;
@@ -230,19 +224,8 @@ function RuleFormDialog({
   const labelClass = "mb-1.5 block text-xs font-medium text-[var(--text-muted)]";
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-6"
-      role="dialog"
-      aria-modal="true"
-      aria-label={rule ? "编辑监听导入规则" : "添加监听导入规则"}
-    >
-      <button
-        type="button"
-        aria-label="关闭"
-        onClick={onClose}
-        className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm"
-      />
-      <div className="relative w-full max-w-md overflow-hidden rounded-2xl border border-white/10 bg-[rgba(16,18,26,0.92)] shadow-[0_32px_90px_rgba(0,0,0,0.7)] backdrop-blur-2xl">
+    <>
+      <Modal open onClose={onClose} label={rule ? "编辑监听导入规则" : "添加监听导入规则"}>
         <div className="space-y-4 p-6">
           <h2 className="text-[17px] font-bold text-white">
             {rule ? "编辑监听导入规则" : "添加监听导入规则"}
@@ -369,7 +352,7 @@ function RuleFormDialog({
             </button>
           </div>
         </div>
-      </div>
+      </Modal>
 
       <DirectoryPicker
         open={pickerOpen}
@@ -380,6 +363,6 @@ function RuleFormDialog({
           setPickerOpen(false);
         }}
       />
-    </div>
+    </>
   );
 }

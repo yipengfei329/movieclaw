@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { CheckIcon } from "@/components/icons";
+import { Modal } from "@/components/modal";
 import { PosterImage } from "@/components/poster-image";
 import { listLibraries, type MediaLibrary } from "@/lib/api/libraries";
 import {
@@ -130,14 +131,6 @@ export function SubscribeDialog({
     if (target) void runPrepare(target);
   }, [target, runPrepare]);
 
-  // Esc 关闭
-  useEffect(() => {
-    if (!target) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [target, onClose]);
-
   const toggleSeason = (n: number) =>
     setSelectedSeasons((prev) => {
       const next = new Set(prev);
@@ -197,22 +190,8 @@ export function SubscribeDialog({
   if (!target) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-6"
-      role="dialog"
-      aria-modal="true"
-      aria-label={`订阅《${target.title}》`}
-    >
-      {/* 遮罩：点击空白处关闭 */}
-      <button
-        type="button"
-        aria-label="关闭"
-        onClick={onClose}
-        className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm"
-      />
-
-      <div className="relative w-full max-w-lg overflow-hidden rounded-2xl border border-white/10 bg-[rgba(16,18,26,0.92)] shadow-[0_32px_90px_rgba(0,0,0,0.7)] backdrop-blur-2xl">
-        <div className="max-h-[76vh] overflow-y-auto p-6">
+    <Modal open onClose={onClose} label={`订阅《${target.title}》`} width="lg">
+      <div className="max-h-[76vh] overflow-y-auto p-6">
           <h2 className="text-[17px] font-bold text-white">
             订阅追踪
             <span className="ml-2 text-[13px] font-normal text-[var(--text-muted)]">
@@ -438,9 +417,8 @@ export function SubscribeDialog({
               </div>
             </div>
           )}
-        </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 

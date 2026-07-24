@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { CheckIcon, ChevronRightIcon, FolderIcon, PencilIcon } from "@/components/icons";
+import { Modal } from "@/components/modal";
 import { browseFs, type FsBrowse } from "@/lib/api/fs";
 
 export function DirectoryPicker({
@@ -106,19 +107,14 @@ export function DirectoryPicker({
       .map((name, i, arr) => ({ name, path: "/" + arr.slice(0, i + 1).join("/") })) ?? [];
 
   return (
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center p-6"
-      role="dialog"
-      aria-modal="true"
-      aria-label="选择服务器目录"
+    <Modal
+      open
+      onClose={onClose}
+      label="选择服务器目录"
+      width="lg"
+      raised
+      panelClassName="flex max-h-[76vh] flex-col"
     >
-      <button
-        type="button"
-        aria-label="关闭"
-        onClick={onClose}
-        className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm"
-      />
-      <div className="relative flex max-h-[76vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/10 bg-[rgba(16,18,26,0.95)] shadow-[0_32px_90px_rgba(0,0,0,0.7)] backdrop-blur-2xl">
         <div className="space-y-3 p-5 pb-3">
           <h2 className="text-[15px] font-bold text-white">选择服务器目录</h2>
 
@@ -237,7 +233,6 @@ export function DirectoryPicker({
             选择此目录
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

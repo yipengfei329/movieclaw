@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useVirtualizer } from "@tanstack/react-virtual";
 
+import { ExpandIcon, ShrinkIcon } from "@/components/icons";
+import { Modal } from "@/components/modal";
 import { fetchLogContent, fetchLogDays, type LogContent, type LogDay } from "@/lib/api/logs";
 import { formatBytes } from "@/lib/format";
 
@@ -150,6 +152,8 @@ export function SystemLogsSection() {
   const [query, setQuery] = useState("");
   const [refreshMs, setRefreshMs] = useState(DEFAULT_REFRESH_MS);
   const [pendingNew, setPendingNew] = useState(0);
+  /** 全屏观看态：日志窗口经 Modal portal 铺满视口，Esc / 缩小按钮退出 */
+  const [fullscreen, setFullscreen] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   /** 是否停在底部（决定新日志是否自动滚入）；翻阅历史时暂停跟随 */
@@ -305,6 +309,13 @@ export function SystemLogsSection() {
     settle();
   }, []);
 
+  // 全屏切换会把滚动容器整体重挂载：强制虚拟滚动重新测量，并按跟随态回底
+  useEffect(() => {
+    virtualizer.measure();
+    if (atBottomRef.current) scrollToBottom();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fullscreen]);
+
   // 未贴底时统计静默刷新新进的日志条数（供「N 条新日志」浮标）
   const prevTotalRef = useRef(0);
   useEffect(() => {
@@ -331,10 +342,11 @@ export function SystemLogsSection() {
 
   const activeMeta = days.find((d) => d.day === activeDay);
 
-  return (
-    <div className="space-y-4">
-      {/* 第一行工具栏：日期 + 元信息 + 自动刷新 + 手动刷新 */}
-      <div className="flex flex-wrap items-center gap-3">
+  // 工具栏与日志窗口抽成片段：普通态与全屏态（Modal portal）复用同一份 JSX；
+  // 同一时刻只渲染其中一处，scrollRef / 虚拟滚动始终只有一个实例
+  const toolbar = (
+    /* 第一行工具栏：日期 + 元信息 + 自动刷新 + 手动刷新 */
+    <div className="flex flex-wrap items-center gap-3">
         <select
           value={activeDay ?? ""}
           disabled={loading || days.length === 0}
@@ -404,15 +416,21 @@ export function SystemLogsSection() {
           {loading ? "加载中…" : "刷新"}
         </button>
       </div>
+  );
 
-      {error && (
-        <p className="rounded-xl border border-[var(--danger)]/30 bg-[var(--danger)]/10 px-4 py-2.5 text-xs text-[var(--danger)]">
-          {error}
-        </p>
-      )}
+  const errorBanner = error ? (
+    <p className="rounded-xl border border-[var(--danger)]/30 bg-[var(--danger)]/10 px-4 py-2.5 text-xs text-[var(--danger)]">
+      {error}
+    </p>
+  ) : null;
 
-      {/* 日志窗口：头部过滤条 + 虚拟滚动内容区 */}
-      <div className="css-glass overflow-hidden !rounded-2xl">
+  // 日志窗口：头部过滤条 + 虚拟滚动内容区；全屏态改为纵向弹性布局撑满面板
+  const logWindow = (
+    <div
+      className={`css-glass overflow-hidden !rounded-2xl ${
+        fullscreen ? "flex min-h-0 flex-1 flex-col" : ""
+      }`}
+    >
         {/* 过滤条：级别 chip（带条数）+ 关键字搜索 */}
         <div className="flex flex-wrap items-center gap-2 border-b border-white/[0.06] bg-white/[0.03] px-3 py-2">
           <div role="radiogroup" aria-label="按级别过滤" className="flex items-center gap-0.5">
@@ -447,6 +465,15 @@ export function SystemLogsSection() {
             aria-label="搜索日志"
             className="w-40 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[12px] text-[var(--text)] outline-none placeholder:text-[var(--text-faint)] focus:border-[var(--accent)]/60 sm:w-52"
           />
+          <button
+            type="button"
+            onClick={() => setFullscreen((f) => !f)}
+            aria-label={fullscreen ? "退出全屏" : "全屏查看"}
+            title={fullscreen ? "退出全屏（Esc）" : "全屏查看"}
+            className="rounded-lg p-1.5 text-[var(--text-muted)] transition-colors hover:bg-white/[0.08] hover:text-[var(--text)]"
+          >
+            {fullscreen ? <ShrinkIcon className="size-4" /> : <ExpandIcon className="size-4" />}
+          </button>
         </div>
 
         {/* 截断提示：默认只取末尾片段，超大日志按需再全量加载 */}
@@ -467,11 +494,13 @@ export function SystemLogsSection() {
         )}
 
         {/* 内容区：虚拟滚动，行高动态测量 */}
-        <div className="relative">
+        <div className={fullscreen ? "relative min-h-0 flex-1" : "relative"}>
           <div
             ref={scrollRef}
             onScroll={handleScroll}
-            className="scroll-thin h-[62vh] min-h-[18rem] overflow-auto bg-black/45 font-mono text-[11.5px] leading-[1.65]"
+            className={`scroll-thin overflow-auto bg-black/45 font-mono text-[11.5px] leading-[1.65] ${
+              fullscreen ? "h-full" : "h-[62vh] min-h-[18rem]"
+            }`}
           >
             {visible.length > 0 ? (
               <div
@@ -519,6 +548,33 @@ export function SystemLogsSection() {
           )}
         </div>
       </div>
+  );
+
+  // 全屏观看态：经 Modal portal 到 body 的沉浸层（fixed 不会被 backdrop-filter
+  // 祖先困住），复用同一份工具栏与日志窗口，Esc / 点遮罩 / 缩小按钮退出
+  if (fullscreen) {
+    return (
+      <Modal
+        open
+        onClose={() => setFullscreen(false)}
+        label="系统日志（全屏）"
+        width="full"
+        panelClassName="h-full"
+      >
+        <div className="flex h-full flex-col gap-4 p-5">
+          {toolbar}
+          {errorBanner}
+          {logWindow}
+        </div>
+      </Modal>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {toolbar}
+      {errorBanner}
+      {logWindow}
 
       <div className="flex items-start justify-between gap-4">
         <p className="text-on-image text-xs leading-5 text-[var(--text-faint)]">

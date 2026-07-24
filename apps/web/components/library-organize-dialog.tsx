@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { createPortal } from "react-dom";
 
 import { CheckIcon, ChevronRightIcon, XIcon } from "@/components/icons";
+import { Modal } from "@/components/modal";
 import {
   type LastOrganize,
   type MediaLibrary,
@@ -101,14 +101,6 @@ export function LibraryOrganizeDialog({
     return () => clearInterval(timer);
   }, [phase, libraryId, onChanged]);
 
-  // Escape 关闭（执行中也允许：后台任务不受影响）
-  useEffect(() => {
-    if (libraryId === null) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [libraryId, onClose]);
-
   // 预览按条目分组：同一部作品的文件放在一起看，比平铺清单好核对得多
   const groups = useMemo(() => {
     if (!preview) return [];
@@ -125,7 +117,7 @@ export function LibraryOrganizeDialog({
     return Array.from(byItem.values()).sort((a, b) => a.title.localeCompare(b.title, "zh"));
   }, [preview]);
 
-  if (library === null || typeof document === "undefined") return null;
+  if (library === null) return null;
 
   const start = () => {
     setError(null);
@@ -145,20 +137,14 @@ export function LibraryOrganizeDialog({
       ? Math.min(100, Math.round((progress.processed / progress.total) * 100))
       : null;
 
-  return createPortal(
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-6"
-      role="dialog"
-      aria-modal="true"
-      aria-label={`整理「${library.name}」的文件名`}
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      label={`整理「${library.name}」的文件名`}
+      width="2xl"
+      panelClassName="flex max-h-[84vh] flex-col"
     >
-      <button
-        type="button"
-        aria-label="关闭"
-        onClick={onClose}
-        className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm"
-      />
-      <div className="relative flex max-h-[84vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-[rgba(16,18,26,0.94)] shadow-[0_32px_90px_rgba(0,0,0,0.7)] backdrop-blur-2xl">
         {/* —— 头部 —— */}
         <div className="flex items-start justify-between gap-3 border-b border-white/[0.08] px-6 pb-4 pt-5">
           <div className="min-w-0">
@@ -433,9 +419,7 @@ export function LibraryOrganizeDialog({
             </div>
           </div>
         )}
-      </div>
-    </div>,
-    document.body,
+    </Modal>
   );
 }
 
