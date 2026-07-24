@@ -6,6 +6,7 @@ import type { Route } from "next";
 import { useRouter } from "next/navigation";
 
 import { Composer } from "@/components/composer";
+import { LlmSetupNotice, useLlmConfigured } from "@/components/llm-gate";
 import { useAgentConversations } from "@/lib/agent-conversations";
 
 /* —— 新任务（路由 /）：仅一个居中输入框，大图氛围页直出。
@@ -17,6 +18,9 @@ export function NewTask() {
   // 创建会话需等服务端返回 session_id 才能跳转；等待期锁住输入框
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 未接入模型供应商时锁定输入框并引导去设置（false = 明确未配置）
+  const llmConfigured = useLlmConfigured();
+  const locked = llmConfigured === false;
 
   function submit(text: string) {
     setCreating(true);
@@ -35,7 +39,16 @@ export function NewTask() {
     <div className="flex h-full flex-col">
       <div className="scroll-thin flex-1 overflow-y-auto">
         <div className="mx-auto flex min-h-full max-w-2xl flex-col justify-center px-6 py-12">
-          <Composer autoFocus value={input} onChange={setInput} onSubmit={submit} busy={creating} />
+          <Composer
+            autoFocus={!locked}
+            value={input}
+            onChange={setInput}
+            onSubmit={submit}
+            busy={creating}
+            disabled={locked}
+            placeholder={locked ? "请先接入 AI 模型，再开始对话" : undefined}
+          />
+          {locked && <LlmSetupNotice />}
           {error && (
             <p className="mt-3 rounded-xl border border-[#ff6b6b]/30 bg-[#ff6b6b]/10 px-3.5 py-2.5 text-[13px] leading-5 text-[#ff6b6b]">
               创建会话失败：{error}

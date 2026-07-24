@@ -101,6 +101,11 @@ def test_start_without_provider_returns_404(client) -> None:
     r = client.post("/api/v1/agent/start", json={"input": "找沙丘"})
     assert r.status_code == 404
     assert "尚未配置模型供应商" in r.json()["message"]
+    # 供应商校验必须在会话落盘之前：失败后不允许残留任何会话记录
+    # （否则侧栏刷新会冒出一条空会话，见 start_agent 中的组装顺序注释）
+    listed = client.get("/api/v1/agent/sessions")
+    assert listed.status_code == 200
+    assert listed.json()["data"] == []
 
 
 def test_start_streams_agent_events(client) -> None:

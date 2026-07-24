@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { Composer } from "@/components/composer";
 import { HighlightedCode } from "@/components/highlighted-code";
+import { LlmSetupNotice, useLlmConfigured } from "@/components/llm-gate";
 import { ChevronRightIcon, SparkIcon } from "@/components/icons";
 import { Markdown } from "@/components/markdown";
 import type { CodeLang } from "@/lib/shiki";
@@ -28,6 +29,8 @@ export function AgentConversationView({ conversationId }: { conversationId: stri
   const [input, setInput] = useState("");
   // 服务端详情加载失败的提示（404 = 会话不存在；其余为网络/服务错误）
   const [loadError, setLoadError] = useState<string | null>(null);
+  // 供应商被删除后打开旧会话：追问同样锁定并引导去设置（false = 明确未配置）
+  const locked = useLlmConfigured() === false;
 
   // 打开会话：详情未加载时从服务端回放（running 会话同时重挂事件流）
   useEffect(() => {
@@ -117,7 +120,10 @@ export function AgentConversationView({ conversationId }: { conversationId: stri
             onSubmit={submit}
             busy={running}
             onStop={() => stop(conversationId)}
+            disabled={locked}
+            placeholder={locked ? "请先接入 AI 模型，再继续对话" : undefined}
           />
+          {locked && <LlmSetupNotice />}
         </div>
       </div>
     </div>

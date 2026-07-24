@@ -62,12 +62,19 @@ async def start_agent(
     转录文件，运行过程中的定稿消息经 recorder 持续追加；续聊时 LLM 上下文
     从转录重建，前端无需再回传历史。
 
-    路由器仍在返回前组装：读配置、解密 Key 依赖请求级 session；组装完成后
-    runner 只持有进程级 LlmRouter、工具集和纯数据参数，后台执行不再访问该
-    session。尚未配置模型供应商时仍同步返回 404，便于前端引导用户去设置。
+    路由器在任何会话记录落盘之前组装：读配置、解密 Key 依赖请求级 session；
+    组装完成后 runner 只持有进程级 LlmRouter、工具集和纯数据参数，后台执行不
+    再访问该 session。尚未配置模型供应商时同步返回 404，且因校验前置，不会残
+    留任何空会话记录，便于前端引导用户去设置。
     """
     store = get_agent_session_store()
     repo = AgentSessionRepository(session)
+
+    # 先组装路由器：内部会校验模型供应商是否已配置，未配置时抛 404。必须在任何
+    # 会话记录落盘（转录文件 / 索引行）之前完成——否则校验失败时，前端虽然收到
+    # 正确的错误提示，磁盘上却已残留一条空会话，下次刷新侧栏会冒出来。
+    llm_router = await acquire_llm_router(session)
+
     if payload.session_id:
         row = await repo.get(payload.session_id)
         if row is None:
@@ -92,7 +99,7 @@ async def start_agent(
     await recorder.record_user_input(payload.input)
 
     runner = AgentRunner(
-        await acquire_llm_router(session),
+        llm_router,
         tools=get_agent_tools(),
         on_message=recorder.on_message,
     )

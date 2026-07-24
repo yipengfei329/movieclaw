@@ -18,6 +18,10 @@ export interface ComposerProps {
   busy?: boolean;
   /** 停止生成回调；仅在 busy 时生效 */
   onStop?: () => void;
+  /** 锁定：输入与提交全部禁用（如尚未配置 AI 模型时），配合 placeholder 说明原因 */
+  disabled?: boolean;
+  /** 覆盖默认占位文案（锁定时用于展示提醒） */
+  placeholder?: string;
   /** 纯色模式：给阅读面板（对话页）用——不渲染 WebGL 玻璃、不折射背景大图，
    * 避免在不透明底色上把海报纹理透回来；首页氛围页保持默认玻璃形态 */
   flat?: boolean;
@@ -31,6 +35,8 @@ export function Composer({
   onSubmit,
   busy = false,
   onStop,
+  disabled = false,
+  placeholder,
   flat = false,
 }: ComposerProps) {
   const { backdrop } = useBackdrop();
@@ -38,7 +44,7 @@ export function Composer({
   const [inner, setInner] = useState("");
   const text = value ?? inner;
   const setText = onChange ?? setInner;
-  const canSubmit = !busy && text.trim().length > 0 && onSubmit != null;
+  const canSubmit = !disabled && !busy && text.trim().length > 0 && onSubmit != null;
   // 生成中且可停止：发送键位变为停止键
   const showStop = busy && onStop != null;
 
@@ -52,6 +58,7 @@ export function Composer({
       <textarea
         rows={2}
         autoFocus={autoFocus}
+        disabled={disabled}
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
@@ -61,7 +68,7 @@ export function Composer({
             submit();
           }
         }}
-        placeholder={busy ? "生成中，可先输入下一条…" : "随心输入，描述一个新任务…"}
+        placeholder={placeholder ?? (busy ? "生成中，可先输入下一条…" : "随心输入，描述一个新任务…")}
         className="scroll-thin block w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-[14px] leading-6 text-[var(--text)] placeholder:text-[var(--text-faint)] focus:outline-none"
       />
       <div className="flex items-center justify-between px-2.5 pb-2.5 pt-1">
