@@ -5,9 +5,8 @@ L1 阶段它的唯一消费者是投递：订阅/手动下载按"入库到哪个
 （``derive_save_path``：主根 + 规范条目目录名）。入库管线、扫描等能力
 在 L2/L3 接入。
 
-首启种子：``seed_default_libraries`` 在库表为空时创建"电影库/剧集库"两个
-默认库，根路径落在 data/library/ 下（与 SQLite 同卷，Docker 部署天然持久化；
-NAS 用户在设置页把根路径改到真实媒体盘即可）。
+系统不预置任何默认库：首次部署库表为空，由前端空态引导用户按自己的
+目录结构创建（NAS 用户的媒体盘路径千差万别，预置库只会造成误导）。
 """
 
 from __future__ import annotations
@@ -15,12 +14,10 @@ from __future__ import annotations
 import logging
 import posixpath
 import re
-from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from movieclaw_api.exceptions import BadRequestException, ConflictException, NotFoundException
-from movieclaw_db.engine import get_database
 from movieclaw_db.models.library import Library
 from movieclaw_db.repositories.library_repo import LibraryRepository
 from movieclaw_media.models import MediaKind
@@ -177,36 +174,3 @@ class LibraryConfigService:
         await self._repo.delete(library_id)
         await self._refresh_watcher()
         logger.info("媒体库「%s」已删除，其订阅将回落到该类型的默认库", row.name)
-
-
-# ---------------------------------------------------------------------------
-# 首启种子（lifespan 启动时调用）
-# ---------------------------------------------------------------------------
-
-
-async def seed_default_libraries(base_dir: str) -> None:
-    """库表为空时种子"电影库/剧集库"两个默认库（幂等：非空即跳过）。
-
-    根路径放在 ``{base_dir}/movies|tv``（base_dir 来自 LIBRARY_DEFAULT_ROOT，
-    默认与 SQLite 同卷，Docker 部署开箱可用）；真实 NAS 用户应在
-    「设置 → 媒体库」把根路径改到媒体盘。
-    """
-    async with get_database().session() as session:
-        repo = LibraryRepository(session)
-        if await repo.count():
-            return
-        base = str(Path(base_dir).resolve())
-        movie = await repo.create(
-            name="电影库", kind=MediaKind.MOVIE.value, root_paths=[posixpath.join(base, "movies")]
-        )
-        tv = await repo.create(
-            name="剧集库", kind=MediaKind.TV.value, root_paths=[posixpath.join(base, "tv")]
-        )
-        logger.info(
-            "已创建默认媒体库：「%s」（%s）与「%s」（%s）——请在「设置 → 媒体库」"
-            "把根路径改到你的媒体目录",
-            movie.name,
-            movie.primary_root,
-            tv.name,
-            tv.primary_root,
-        )

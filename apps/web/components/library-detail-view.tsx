@@ -32,6 +32,7 @@ import {
   listUnidentified,
   redownloadMissing,
   startLibraryScan,
+  stopLibraryScan,
 } from "@/lib/api/libraries";
 import { listSubscriptions, type Subscription } from "@/lib/api/subscriptions";
 import { formatBytes } from "@/lib/format";
@@ -181,9 +182,10 @@ export function LibraryDetailView({ libraryId }: { libraryId: number }) {
               {formatBytes(stats.total_size_bytes)}
               {library.primary_root ? ` · ${library.primary_root}` : ""}
             </p>
-            {library.last_scan && (
+            {library.last_scan && !busy && (
               <p className="mt-1 text-[12px] text-white/45">
-                最近扫描 {formatRelativeTime(library.last_scan.finished_at)} · 新入账{" "}
+                最近扫描 {formatRelativeTime(library.last_scan.finished_at)}
+                {library.last_scan.cancelled ? "（手动停止，未扫完）" : ""} · 新入账{" "}
                 {library.last_scan.scanned}（识别 {library.last_scan.identified} / 待识别{" "}
                 {library.last_scan.unidentified}）
                 {library.last_scan.marked_missing > 0
@@ -198,8 +200,20 @@ export function LibraryDetailView({ libraryId }: { libraryId: number }) {
               </p>
             )}
             {/* —— 健康状态胶囊：工单收进抽屉，海报墙保持干净 —— */}
-            {(missing.length > 0 || unidentified.length > 0 || importing > 0) && (
+            {(missing.length > 0 || unidentified.length > 0 || importing > 0 || busy) && (
               <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                {busy && (
+                  <span className="flex items-center gap-1.5 rounded-full border border-[#7dd3fc]/35 bg-[#7dd3fc]/[0.12] px-3 py-1 text-[12px] font-semibold text-[#7dd3fc]">
+                    <span className="size-3 animate-spin rounded-full border-[1.5px] border-[#7dd3fc]/30 border-t-[#7dd3fc]" />
+                    {library.scanning
+                      ? `正在扫描${
+                          library.scan_progress && library.scan_progress.total > 0
+                            ? ` ${library.scan_progress.processed}/${library.scan_progress.total}`
+                            : ""
+                        } · 识别到的内容会自动入库`
+                      : "正在整理文件名 · 完成后自动刷新"}
+                  </span>
+                )}
                 {importing > 0 && (
                   <span className="flex items-center gap-1.5 rounded-full border border-[#7dd3fc]/35 bg-[#7dd3fc]/[0.12] px-3 py-1 text-[12px] font-semibold text-[#7dd3fc]">
                     <span className="size-1.5 animate-pulse rounded-full bg-[#7dd3fc]" />
@@ -230,12 +244,13 @@ export function LibraryDetailView({ libraryId }: { libraryId: number }) {
             )}
           </div>
           <div className="flex shrink-0 items-center gap-2.5">
+            {/* 扫描中按钮切换为「停止扫描」（增量幂等：已入账的保留，剩余下次继续） */}
             <button
               type="button"
-              disabled={busy}
+              disabled={busy && !library.scanning}
               onClick={() => {
                 setNotice(null);
-                void startLibraryScan(library.id)
+                void (library.scanning ? stopLibraryScan(library.id) : startLibraryScan(library.id))
                   .then(() => reload())
                   .catch((e) => setNotice((e as Error).message));
               }}
@@ -244,7 +259,7 @@ export function LibraryDetailView({ libraryId }: { libraryId: number }) {
               {library.scanning ? (
                 <span className="flex items-center gap-2">
                   <span className="size-3.5 animate-spin rounded-full border-2 border-white/25 border-t-white/80" />
-                  扫描中…
+                  停止扫描
                   {library.scan_progress && library.scan_progress.total > 0
                     ? ` ${Math.min(
                         100,
@@ -286,10 +301,13 @@ export function LibraryDetailView({ libraryId }: { libraryId: number }) {
                 "整理文件名"
               )}
             </button>
+            {/* 扫描/整理中锁定编辑：进行中的任务在按当前根路径读写台账 */}
             <button
               type="button"
+              disabled={busy}
+              title={busy ? "扫描/整理进行中，暂不能编辑" : undefined}
               onClick={() => setEditing(library)}
-              className="btn-glass px-4 py-2 text-[13px] font-medium"
+              className="btn-glass px-4 py-2 text-[13px] font-medium disabled:opacity-50"
             >
               编辑库
             </button>
@@ -747,6 +765,10 @@ function UnidentifiedRow({
       <p className="truncate font-mono text-[11.5px] text-[var(--text-muted)]" title={file.file_path}>
         {file.file_path}
       </p>
+      {/* 识别失败原因：TMDB 访问失败（重扫可解）与真找不到（需人工认领）区分开 */}
+      {file.reason && (
+        <p className="mt-1 text-[11.5px] leading-5 text-[#f5c451]/90">{file.reason}</p>
+      )}
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <input
           type="text"

@@ -94,6 +94,7 @@ class LibraryFileRepository:
         existing.source = row.source
         existing.site_id = row.site_id
         existing.torrent_id = row.torrent_id
+        existing.unidentified_reason = row.unidentified_reason
         existing.missing_since = None  # 再次发现即在位
         existing.updated_at = utcnow()
         await self._session.commit()
@@ -121,6 +122,7 @@ class LibraryFileRepository:
         row.media_item_id = media_item_id
         row.season_number = season_number
         row.episode_number = episode_number
+        row.unidentified_reason = None  # 已有身份，失败原因随之失义
         row.updated_at = utcnow()
         await self._session.commit()
         await self._session.refresh(row)

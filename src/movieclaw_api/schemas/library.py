@@ -40,6 +40,7 @@ class LastScanView(BaseModel):
     unidentified: int
     marked_missing: int = Field(description="本轮标记丢失的文件数")
     deferred: int = Field(default=0, description="疑似写入中暂缓入账的文件数（稍后自动补扫）")
+    cancelled: bool = Field(default=False, description="本轮扫描被用户手动停止（未扫完）")
     errors: list[str] = Field(default_factory=list)
 
     @field_serializer("finished_at")
@@ -199,6 +200,9 @@ class UnidentifiedFileView(BaseModel):
     size_bytes: int
     season_number: int
     episode_number: int
+    reason: str | None = Field(
+        default=None, description="识别失败原因（如 TMDB 无法访问 / 片名解析失败）"
+    )
 
 
 class ClaimPayload(BaseModel):

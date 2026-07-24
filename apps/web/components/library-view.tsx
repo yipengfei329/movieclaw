@@ -9,6 +9,7 @@ import { createPortal } from "react-dom";
 import { DirectoryPicker } from "@/components/directory-picker";
 import { FilmIcon, FolderIcon, MoreIcon, PlusIcon, TvIcon, XIcon } from "@/components/icons";
 import { LibraryOrganizeDialog } from "@/components/library-organize-dialog";
+import { Modal } from "@/components/modal";
 import { MediaRow } from "@/components/media-row";
 import type { PosterCardAction } from "@/components/poster-card";
 import { Tooltip } from "@/components/tooltip";
@@ -23,6 +24,7 @@ import {
   listLibraryItems,
   setDefaultLibrary,
   startLibraryScan,
+  stopLibraryScan,
   updateLibrary,
 } from "@/lib/api/libraries";
 import type { Subscription } from "@/lib/api/subscriptions";
@@ -185,6 +187,25 @@ export function LibraryView() {
             className="btn-glass px-4 py-2 text-[13px] font-medium text-[var(--text)]"
           >
             重试
+          </button>
+        </div>
+      )}
+
+      {libraries !== null && !failed && libraries.length === 0 && (
+        <div className="mt-20 flex flex-col items-center gap-4 px-6 text-center">
+          <p className="text-[15px] font-semibold text-[var(--text)]">还没有媒体库</p>
+          <p className="max-w-[440px] text-[13px] leading-relaxed text-[var(--text-muted)]">
+            媒体库定义「内容放在哪」：订阅和下载完成的影片会整理进对应库的根目录，
+            Plex / Emby 指向同一目录即可识别。建议按类型分别创建，比如电影库、剧集库，
+            根路径选到你的媒体盘（Docker 部署时是挂进容器的那个路径）。
+          </p>
+          <button
+            type="button"
+            onClick={() => setEditing("new")}
+            className="btn-accent flex items-center gap-1 rounded-full py-2 pl-3 pr-4 text-[13px] font-semibold"
+          >
+            <PlusIcon className="size-4" />
+            创建第一个媒体库
           </button>
         </div>
       )}
@@ -539,26 +560,32 @@ function LibraryCardMenu({
             className="surface-raised w-36 overflow-hidden rounded-xl p-1.5"
             style={{ position: "fixed", left: menuPos.left, top: menuPos.top, zIndex: 50 }}
           >
-            <button
-              type="button"
-              onClick={() => {
-                setMenuPos(null);
-                onEdit();
-              }}
-              className="glass-row px-2.5 py-2 text-[13px] font-medium"
-            >
-              编辑库
-            </button>
+            {/* 扫描/整理中锁定编辑与删除：进行中的任务在按当前根路径读写台账 */}
             <button
               type="button"
               disabled={library.scanning || library.organizing}
               onClick={() => {
                 setMenuPos(null);
+                onEdit();
+              }}
+              className="glass-row px-2.5 py-2 text-[13px] font-medium disabled:opacity-40"
+            >
+              编辑库
+            </button>
+            <button
+              type="button"
+              disabled={library.organizing}
+              onClick={() => {
+                setMenuPos(null);
+                if (library.scanning) {
+                  guard(() => stopLibraryScan(library.id));
+                  return;
+                }
                 onScan();
               }}
               className="glass-row px-2.5 py-2 text-[13px] font-medium disabled:opacity-40"
             >
-              {library.scanning ? "正在扫描…" : "扫描库"}
+              {library.scanning ? "停止扫描" : "扫描库"}
             </button>
             <button
               type="button"
@@ -581,6 +608,7 @@ function LibraryCardMenu({
             </button>
             <button
               type="button"
+              disabled={library.scanning || library.organizing}
               onClick={() => {
                 setMenuPos(null);
                 if (
@@ -591,7 +619,7 @@ function LibraryCardMenu({
                   return;
                 guard(() => deleteLibrary(library.id));
               }}
-              className="glass-row px-2.5 py-2 text-[13px] font-medium !text-[var(--danger)] hover:!bg-[rgba(255,107,107,0.12)]"
+              className="glass-row px-2.5 py-2 text-[13px] font-medium !text-[var(--danger)] hover:!bg-[rgba(255,107,107,0.12)] disabled:opacity-40"
             >
               删除库
             </button>
@@ -634,13 +662,6 @@ export function LibraryFormDialog({
     setPickerTarget(null);
   }, [state, library]);
 
-  useEffect(() => {
-    if (state === null) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [state, onClose]);
-
   if (state === null) return null;
 
   const canSubmit = !busy && name.trim().length > 0 && roots.length > 0;
@@ -661,19 +682,8 @@ export function LibraryFormDialog({
   const labelClass = "mb-1.5 block text-xs font-medium text-[var(--text-muted)]";
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-6"
-      role="dialog"
-      aria-modal="true"
-      aria-label={library ? `编辑「${library.name}」` : "添加媒体库"}
-    >
-      <button
-        type="button"
-        aria-label="关闭"
-        onClick={onClose}
-        className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm"
-      />
-      <div className="relative w-full max-w-md overflow-hidden rounded-2xl border border-white/10 bg-[rgba(16,18,26,0.92)] shadow-[0_32px_90px_rgba(0,0,0,0.7)] backdrop-blur-2xl">
+    <>
+      <Modal open onClose={onClose} label={library ? `编辑「${library.name}」` : "添加媒体库"}>
         <div className="max-h-[76vh] space-y-4 overflow-y-auto p-6">
           <h2 className="text-[17px] font-bold text-white">
             {library ? "编辑媒体库" : "添加媒体库"}
@@ -813,7 +823,7 @@ export function LibraryFormDialog({
             </button>
           </div>
         </div>
-      </div>
+      </Modal>
 
       {/* 服务端目录选择器：追加时从最近添加的根起步，更改时从被改的根起步；
           追加去重，更改为原位替换（改主根仍是主根），撞上已有路径时合并去重 */}
@@ -838,7 +848,6 @@ export function LibraryFormDialog({
           setPickerTarget(null);
         }}
       />
-
-    </div>
+    </>
   );
 }

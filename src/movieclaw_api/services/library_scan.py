@@ -75,6 +75,8 @@ NEW_FILE_QUIET_SECONDS = 300
 
 # 同一时间每个库只允许一个扫描在跑（进程内互斥）
 _scanning: set[int] = set()
+# 用户请求停止的库：扫描循环在每个文件之间检查，命中即提前收尾
+_stop_requests: set[int] = set()
 # 暂缓补扫任务：每库至多一个（写入结束后没有事件叫醒扫描，靠它到点补扫）
 _rescan_tasks: dict[int, asyncio.Task] = {}
 # 每库最近一次扫描的结论（进程内即可：给前端"扫描完成了什么"的反馈——
@@ -96,6 +98,7 @@ class ScanSummary:
     skipped_known: int = 0  # 已在台账、直接跳过
     marked_missing: int = 0  # 台账有但磁盘上已消失，标记 missing
     deferred: int = 0  # 疑似写入中（mtime 太新），本轮暂缓入账，稍后自动补扫
+    cancelled: bool = False  # 用户手动停止：已入账的保留，未处理的留待下次扫描
     errors: list[str] = field(default_factory=list)
     # 暂缓文件的最近到期秒数（补扫的等待时长；对外接口不暴露）
     recheck_delay_seconds: float = 0.0
@@ -103,6 +106,19 @@ class ScanSummary:
 
 def is_scanning(library_id: int) -> bool:
     return library_id in _scanning
+
+
+def request_stop_scan(library_id: int) -> bool:
+    """请求停止该库进行中的扫描；没有扫描在跑返回 False。
+
+    停止是"提前收尾"而非回滚：已识别入账的文件保留，还没处理到的文件
+    下次扫描继续（扫描本就是增量幂等的）。循环在文件之间检查标志，
+    单个文件的识别（含 TMDB 请求）不会被打断，通常几秒内停下。
+    """
+    if library_id not in _scanning:
+        return False
+    _stop_requests.add(library_id)
+    return True
 
 
 def _arm_rescan(library_id: int, delay: float) -> None:
@@ -156,10 +172,12 @@ async def scan_library(library_id: int) -> ScanSummary:
         return summary
     finally:
         _scanning.discard(library_id)
+        _stop_requests.discard(library_id)
         _progress.pop(library_id, None)
         _last_scans[library_id] = (utcnow(), summary)
         # 暂缓过文件的扫描要自己安排补扫：写入结束后不会再有事件叫醒我们
-        if summary.deferred:
+        # （手动停止的不自动补扫——用户的意图是"别扫了"）
+        if summary.deferred and not summary.cancelled:
             _arm_rescan(library_id, summary.recheck_delay_seconds)
 
 
@@ -198,6 +216,16 @@ async def _scan(library_id: int, summary: ScanSummary) -> ScanSummary:
         now_ts = time.time()
         min_remaining: float | None = None
         for done, (root_path, file, is_disc) in enumerate(pending, start=1):
+            # 用户请求停止：提前收尾。已入账的保留，剩余文件下次扫描继续
+            if library_id in _stop_requests:
+                summary.cancelled = True
+                logger.info(
+                    "媒体库 #%s 扫描被手动停止（已处理 %d / 共 %d）",
+                    library_id,
+                    done - 1,
+                    len(pending),
+                )
+                break
             path_str = str(file)
             existing = known.get(path_str)
             if existing is not None and existing.missing_since is None:
@@ -383,7 +411,7 @@ async def _ingest_file(
         summary.relinked += 1
         return
 
-    item = await _identify(
+    item, unidentified_reason = await _identify(
         media_service,
         kind,
         root,
@@ -413,6 +441,7 @@ async def _ingest_file(
             media_source=attrs.media_source,
             release_group=attrs.release_group,
             source=FileSource.SCANNED,
+            unidentified_reason=None if item is not None else unidentified_reason,
         )
     )
     if item is not None:
@@ -529,12 +558,18 @@ async def _identify(
     *,
     duration_seconds: int | None = None,
     hint: _SubtitleHint | None = None,
-) -> MediaItem | None:
+) -> tuple[MediaItem | None, str | None]:
+    """识别链主入口，返回 (条目, 失败原因)。
+
+    识别成功时原因为 None；失败时给出用户能看懂的中文原因（落到台账的
+    ``unidentified_reason``，待识别清单展示）——尤其要把"TMDB 访问失败"
+    与"确实找不到匹配"区分开：前者修好网络重扫即可，后者需要人工认领。
+    """
     # ① NFO 精确身份
     tmdb_id = _nfo_tmdb_id(root, file)
     if tmdb_id is not None:
         try:
-            return await media_service.ensure_media_item(kind, tmdb_id)
+            return await media_service.ensure_media_item(kind, tmdb_id), None
         except Exception as exc:  # noqa: BLE001 -- NFO 的 id 可能已失效，降级到解析
             logger.warning("NFO 指向的 TMDB 条目建档失败（id=%s）：%s", tmdb_id, exc)
 
@@ -551,11 +586,12 @@ async def _identify(
         if evidence is not None:
             evidence.total_episodes = hint.total_episodes
     if evidence is None:
-        return None
+        return None, "无法从文件名/目录名解析出片名，请人工认领"
     evidence.duration_seconds = duration_seconds
     key = (evidence.title, evidence.alt_title, evidence.year, evidence.season)
     if key in cache:
         return cache[key]
+    year_note = f"（{evidence.year}）" if evidence.year else ""
     try:
         tmdb_id = await verify_resolve(get_tmdb_client(), kind, evidence)
         item = (
@@ -565,9 +601,15 @@ async def _identify(
         )
     except Exception as exc:  # noqa: BLE001 -- TMDB 波动不该中断扫描
         logger.warning("TMDB 收敛失败（%s / %s）：%s", evidence.title, evidence.year, exc)
-        return None
-    cache[key] = item
-    return item
+        # 网络类失败不写入缓存：同名文件下次扫描还有机会重试
+        return None, f"TMDB 查询失败（网络不通或接口异常），修复后重新扫描即可：{exc}"
+    reason = (
+        None
+        if item is not None
+        else f"按「{evidence.title}」{year_note}在 TMDB 未找到可确认的匹配，请人工认领"
+    )
+    cache[key] = (item, reason)
+    return item, reason
 
 
 def _nfo_tmdb_id(root: Path, file: Path) -> int | None:

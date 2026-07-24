@@ -79,10 +79,6 @@ def build_lifespan(settings: Settings):
         init_site_access()
         # 重启自愈：清理上次遗留的"验证中"状态
         await _reset_stale_verifying()
-        # 媒体库首启种子：库表为空时创建"电影库/剧集库"两个默认库
-        from movieclaw_api.services.library_config import seed_default_libraries
-
-        await seed_default_libraries(settings.library_default_root)
         # Agent 运行注册表必须与当前事件循环同生共死：它持有后台 task 和
         # asyncio.Condition，不能跨 FastAPI 生命周期复用。
         init_agent_run_registry()

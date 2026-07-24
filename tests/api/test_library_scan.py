@@ -395,3 +395,59 @@ async def test_scan_relink_ambiguous_candidates_bail_out(db, tmp_path) -> None:
         files = list((await session.execute(select(LibraryFile))).scalars().all())
         # 新文件落新行（经目录名照常识别），两条旧行原地保留（留给对账标记 missing）
         assert len(files) == 4
+
+
+async def test_scan_records_unidentified_reason_and_claim_clears(db, tmp_path) -> None:
+    """认不出的文件要在台账上留下"为什么认不出"（前端待识别清单展示）；
+    人工认领后原因随之清除。"""
+    root = _make_tv_library(tmp_path)
+    async with db.session() as session:
+        library = await LibraryRepository(session).create(
+            name="剧集库", kind="tv", root_paths=[str(root)]
+        )
+    await scan_library(library.id)
+
+    async with db.session() as session:
+        from movieclaw_db.repositories.library_file_repo import LibraryFileRepository
+
+        repo = LibraryFileRepository(session)
+        unknown = (await repo.list_unidentified(library_id=library.id))[0]
+        assert unknown.unidentified_reason  # 有可读的失败原因
+        identified = [
+            f
+            for f in await repo.list_by_library(library.id)
+            if f.media_item_id is not None
+        ]
+        assert all(f.unidentified_reason is None for f in identified)
+
+        # 认领后原因失义，应清除
+        item_id = identified[0].media_item_id
+        claimed = await repo.claim_identity(
+            unknown.id, media_item_id=item_id, season_number=1, episode_number=9
+        )
+        assert claimed is not None and claimed.unidentified_reason is None
+
+
+async def test_scan_stop_request_cancels_early(db, tmp_path) -> None:
+    """停止请求让扫描提前收尾：cancelled 标记置位、剩余文件不入账；
+    没有扫描在跑时 request_stop_scan 返回 False。"""
+    from movieclaw_api.services.library_scan import request_stop_scan
+
+    root = _make_tv_library(tmp_path)
+    async with db.session() as session:
+        library = await LibraryRepository(session).create(
+            name="剧集库", kind="tv", root_paths=[str(root)]
+        )
+
+    assert request_stop_scan(library.id) is False  # 没在扫
+
+    # 预置停止标志：扫描循环在第一个文件前即检查到并提前收尾
+    scan_mod._stop_requests.add(library.id)
+    summary = await scan_library(library.id)
+    assert summary.cancelled is True
+    assert summary.scanned == 0  # 一个文件都没处理
+    assert library.id not in scan_mod._stop_requests  # 收尾时清除标志
+
+    # 停止不破坏增量语义：再扫一次照常完成
+    summary2 = await scan_library(library.id)
+    assert summary2.cancelled is False and summary2.identified == 2

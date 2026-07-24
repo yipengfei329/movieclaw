@@ -90,3 +90,11 @@ class LibraryFile(TimestampMixin, table=True):
     missing_since: datetime | None = Field(
         default=None, description="对账发现文件消失的时间；NULL=在位"
     )
+
+    # 待识别的原因（扫描识别链失败时记录，给用户"为什么认不出"的解释，
+    # 如 TMDB 无法访问 / 解析不出片名）；已识别或人工认领后为 NULL
+    unidentified_reason: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description="识别失败原因；NULL=已识别或未记录",
+    )

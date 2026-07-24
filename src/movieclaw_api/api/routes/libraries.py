@@ -42,6 +42,7 @@ from movieclaw_api.services.library_organize import (
 from movieclaw_api.services.library_scan import (
     is_scanning,
     last_scan,
+    request_stop_scan,
     scan_library,
     scan_progress,
 )
@@ -77,6 +78,7 @@ def _last_scan_view(library_id: int) -> LastScanView | None:
         unidentified=summary.unidentified,
         marked_missing=summary.marked_missing,
         deferred=summary.deferred,
+        cancelled=summary.cancelled,
         errors=list(summary.errors),
     )
 
@@ -179,6 +181,7 @@ async def list_unidentified(
                 size_bytes=r.size_bytes,
                 season_number=r.season_number,
                 episode_number=r.episode_number,
+                reason=r.unidentified_reason,
             )
             for r in rows
         ]
@@ -211,29 +214,60 @@ async def get_library(
 @router.post(
     "",
     response_model=ApiResponse[LibraryView],
-    summary="创建媒体库（该类型首个库自动成为默认）",
+    summary="创建媒体库（该类型首个库自动成为默认，并自动开始首次扫描）",
 )
 async def create_library(
     payload: LibraryPayload,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
 ) -> ApiResponse[LibraryView]:
     service = LibraryConfigService(session)
     row = await service.create(name=payload.name, kind=payload.kind, root_paths=payload.root_paths)
-    return ok(LibraryView.from_model(row), message=f"已创建媒体库「{row.name}」")
+    # 建库即扫描：根路径下的存量文件立刻开始识别入账，不用用户再手动点一次
+    assert row.id is not None
+    background_tasks.add_task(scan_library, row.id)
+    return ok(
+        LibraryView.from_model(row, scanning=True),
+        message=f"已创建媒体库「{row.name}」，正在扫描存量文件",
+    )
+
+
+def _assert_not_busy(library_name: str, library_id: int) -> None:
+    """扫描/整理期间锁定库的编辑与删除——两个任务都在按当前根路径批量
+    读写台账，此刻改根路径或删库会让进行中的任务写入过期配置。"""
+    if is_scanning(library_id):
+        raise ConflictException(
+            f"「{library_name}」正在扫描中，暂不能编辑或删除；请先停止扫描或等待完成"
+        )
+    if is_organizing(library_id):
+        raise ConflictException(
+            f"「{library_name}」正在整理文件名，暂不能编辑或删除；请等待整理完成"
+        )
 
 
 @router.put(
     "/{library_id}",
     response_model=ApiResponse[LibraryView],
-    summary="更新媒体库（名称与根路径；类型创建后不可改）",
+    summary="更新媒体库（名称与根路径；类型创建后不可改；扫描/整理中锁定）",
 )
 async def update_library(
     library_id: int,
     payload: LibraryPayload,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
 ) -> ApiResponse[LibraryView]:
     service = LibraryConfigService(session)
+    before = await service.get(library_id)
+    _assert_not_busy(before.name, library_id)
+    roots_changed = list(before.root_paths) != [p.strip() for p in payload.root_paths if p.strip()]
     row = await service.update(library_id, name=payload.name, root_paths=payload.root_paths)
+    # 根路径变了就自动补扫：新目录的存量立刻入账，移除目录下的文件标记 missing
+    if roots_changed:
+        background_tasks.add_task(scan_library, library_id)
+        return ok(
+            LibraryView.from_model(row, scanning=True),
+            message="已更新，正在按新的根路径重新扫描",
+        )
     return ok(LibraryView.from_model(row), message="已更新")
 
 
@@ -256,13 +290,15 @@ async def set_default_library(
 @router.delete(
     "/{library_id}",
     response_model=ApiResponse[dict],
-    summary="删除媒体库（不动磁盘文件；其订阅回落到该类型默认库）",
+    summary="删除媒体库（不动磁盘文件；其订阅回落到该类型默认库；扫描/整理中锁定）",
 )
 async def delete_library(
     library_id: int,
     session: AsyncSession = Depends(get_session),
 ) -> ApiResponse[dict]:
     service = LibraryConfigService(session)
+    row = await service.get(library_id)
+    _assert_not_busy(row.name, library_id)
     await service.delete(library_id)
     return ok({}, message="已删除（磁盘文件未受影响）")
 
@@ -295,6 +331,22 @@ async def start_scan(
         ScanResultView(started=True, message=f"已开始扫描「{library.name}」"),
         message=f"已开始扫描「{library.name}」，完成后库存自动更新",
     )
+
+
+@router.post(
+    "/{library_id}/scan/stop",
+    response_model=ApiResponse[dict],
+    summary="停止进行中的扫描（已入账的保留，剩余文件下次扫描继续）",
+)
+async def stop_scan(
+    library_id: int,
+    session: AsyncSession = Depends(get_session),
+) -> ApiResponse[dict]:
+    service = LibraryConfigService(session)
+    library = await service.get(library_id)
+    if not request_stop_scan(library_id):
+        raise ConflictException(f"「{library.name}」当前没有进行中的扫描")
+    return ok({}, message=f"正在停止「{library.name}」的扫描（当前文件处理完即停下）")
 
 
 # ---------------------------------------------------------------------------

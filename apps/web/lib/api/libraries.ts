@@ -73,6 +73,8 @@ export interface LastScan {
   marked_missing: number;
   /** 疑似写入中暂缓入账的文件数（稍后自动补扫） */
   deferred: number;
+  /** 本轮扫描被用户手动停止（未扫完，剩余文件下次扫描继续） */
+  cancelled: boolean;
   errors: string[];
 }
 
@@ -166,6 +168,8 @@ export interface UnidentifiedFile {
   size_bytes: number;
   season_number: number;
   episode_number: number;
+  /** 识别失败原因（如 TMDB 无法访问 / 片名解析失败）；旧数据可能为 null */
+  reason: string | null;
 }
 
 /** 创建/更新库的请求体。kind 仅创建时生效。 */
@@ -240,6 +244,15 @@ export function listLibraryItems(id: number, init?: RequestInit): Promise<Librar
 export function startLibraryScan(id: number): Promise<{ started: boolean; message: string }> {
   return unwrap(
     request<ApiEnvelope<{ started: boolean; message: string }>>(`/libraries/${id}/scan`, {
+      method: "POST",
+    }),
+  );
+}
+
+/** 停止进行中的扫描（已入账的保留，剩余文件下次扫描继续；没在扫返回 409）。 */
+export function stopLibraryScan(id: number): Promise<Record<string, never>> {
+  return unwrap(
+    request<ApiEnvelope<Record<string, never>>>(`/libraries/${id}/scan/stop`, {
       method: "POST",
     }),
   );
