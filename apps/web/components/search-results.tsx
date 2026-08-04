@@ -39,7 +39,7 @@ import { formatDateTime, formatRelativeTime } from "@/lib/time";
  *    （SortDropdown，键+方向合一）+ 分辨率 chips（命中前 3 平铺）+ 年份/季/
  *    压制组单维度下拉（FacetDropdown，可选值 ≥2 才出现）+ 纯图标视图切换
  *    + 带角标的「筛选」按钮；
- * 2. **筛选弹层**：站点/年份/季/集/片源/编码/HDR/音频/压制组按组分区，
+ * 2. **筛选弹层**：站点/年份/季/集/片源/编码/HDR/音频/字幕/压制组按组分区，
  *    chips 多选（组内=或，组间=且），底部实时显示命中数；服务重度组合场景；
  * 3. **已应用条件回显行**：弹层里激活的条件以可摘除 chip 回显在结果上方，
  *    用户不用打开弹层就知道列表被什么约束着。
@@ -244,6 +244,7 @@ interface Filters {
   codec: Set<string>;
   hdr: Set<string>;
   audio: Set<string>;
+  subtitle: Set<string>;
   group: Set<string>;
 }
 
@@ -258,15 +259,24 @@ function emptyFilters(): Filters {
     codec: new Set(),
     hdr: new Set(),
     audio: new Set(),
+    subtitle: new Set(),
     group: new Set(),
   };
 }
 
 /** 弹层内维度的键（回显行与角标计数只统计这些——类型/分辨率在工具栏上自明）。 */
 const SHEET_KEYS = [
-  "site", "year", "season", "episode", "source", "codec", "hdr", "audio", "group",
+  "site", "year", "season", "episode", "source", "codec", "hdr", "audio", "subtitle", "group",
 ] as const;
 type SheetKey = (typeof SHEET_KEYS)[number];
+
+const SUBTITLE_LANGUAGE_LABELS: Record<string, string> = {
+  "zh-Hans": "简体中文字幕",
+};
+
+function subtitleLanguageLabel(language: string): string {
+  return SUBTITLE_LANGUAGE_LABELS[language] ?? language;
+}
 
 function sheetSelectionCount(f: Filters): number {
   return SHEET_KEYS.reduce((sum, key) => sum + f[key].size, 0);
@@ -344,6 +354,12 @@ const FILTER_DIMENSIONS: { dim: FilterDim; pass: (hit: TorrentHit, f: Filters) =
     pass: (hit, f) => !f.audio.size || (hit.attrs?.audio ?? []).some((v) => f.audio.has(v)),
   },
   {
+    dim: "subtitle",
+    pass: (hit, f) =>
+      !f.subtitle.size ||
+      (hit.attrs?.subtitle_languages ?? []).some((v) => f.subtitle.has(v)),
+  },
+  {
     dim: "group",
     pass: (hit, f) =>
       !f.group.size || (!!hit.attrs?.release_group && f.group.has(hit.attrs.release_group)),
@@ -376,6 +392,7 @@ interface Facets {
   codec: FacetValue[];
   hdr: FacetValue[];
   audio: FacetValue[];
+  subtitles: FacetValue[];
   groups: FacetValue[];
   /** 站点维度按 site_id 计数（chip 列表来自站点搜索状态，这里只供数字）。 */
   sites: Map<string, number>;
@@ -388,6 +405,7 @@ interface FacetMaps {
   codec: Map<string, number>;
   hdr: Map<string, number>;
   audio: Map<string, number>;
+  subtitles: Map<string, number>;
   groups: Map<string, number>;
   sites: Map<string, number>;
   years: Map<number, number>;
@@ -410,6 +428,7 @@ function collectFacetMaps(items: TorrentHit[], filters: Filters | null): FacetMa
     codec: new Map(),
     hdr: new Map(),
     audio: new Map(),
+    subtitles: new Map(),
     groups: new Map(),
     sites: new Map(),
     years: new Map(),
@@ -454,6 +473,9 @@ function collectFacetMaps(items: TorrentHit[], filters: Filters | null): FacetMa
     if (want("codec") && a.video_codec) bump(maps.codec, a.video_codec);
     if (want("hdr")) for (const v of a.hdr) bump(maps.hdr, v);
     if (want("audio")) for (const v of a.audio) bump(maps.audio, v);
+    if (want("subtitle")) {
+      for (const v of a.subtitle_languages ?? []) bump(maps.subtitles, v);
+    }
     if (want("group") && a.release_group) bump(maps.groups, a.release_group);
   }
   return maps;
@@ -488,6 +510,7 @@ function aggregateFacets(items: TorrentHit[], filters: Filters): Facets {
     codec: toSorted("codec", 50),
     hdr: toSorted("hdr", 50),
     audio: toSorted("audio", 50),
+    subtitles: toSorted("subtitles", 50),
     groups: toSorted("groups", 50),
     sites: counts.sites,
   };
@@ -1749,6 +1772,19 @@ function FilterSheet({
               ))}
             </SheetGroup>
           )}
+          {facets.subtitles.length > 0 && (
+            <SheetGroup title="字幕">
+              {facets.subtitles.map((v) => (
+                <FacetChip
+                  key={v.value}
+                  label={subtitleLanguageLabel(v.value)}
+                  count={v.count}
+                  active={filters.subtitle.has(v.value)}
+                  onToggle={() => toggle("subtitle", v.value)}
+                />
+              ))}
+            </SheetGroup>
+          )}
           {facets.groups.length > 0 && (
             <SheetGroup title="压制组">
               {facets.groups.map((v) => (
@@ -1804,6 +1840,7 @@ function AppliedChips({
     if (key === "site") return siteName(String(value));
     if (key === "season") return `第${value}季`;
     if (key === "episode") return `第${value}集`;
+    if (key === "subtitle") return subtitleLanguageLabel(String(value));
     return String(value);
   };
 
@@ -2440,7 +2477,8 @@ function rawTitleTooltip(hit: TorrentHit): string {
 
 /**
  * 版本规格摘要（分组模式的行标题）：片名已由组头承担，行内只描述这个版本
- * 与同组其他版本的差异——季集 + 分辨率 + 片源/Remux + 编码 + HDR + 音轨 + 压制组。
+ * 与同组其他版本的差异——季集 + 分辨率 + 片源/Remux + 编码 + HDR + 字幕 + 音轨
+ * + 压制组。
  */
 function specSummary(attrs: TorrentAttrs): string | null {
   const parts = [
@@ -2450,6 +2488,7 @@ function specSummary(attrs: TorrentAttrs): string | null {
     attrs.remux && "Remux",
     attrs.video_codec,
     ...attrs.hdr,
+    ...(attrs.subtitle_languages ?? []).map(subtitleLanguageLabel),
     ...attrs.audio.slice(0, 2),
     attrs.release_group,
   ].filter(Boolean);
@@ -2645,7 +2684,7 @@ const MAX_ATTR_BADGES = 4;
  *
  * 等权重小徽标超过 4-5 个后可读性反而下降（chip fatigue），且分辨率/片源/编码
  * 这些维度在顶部筛选栏已可见可筛。优先级：季集（剧集的关键标识）> 分辨率 >
- * Remux > HDR > 压制组（PT 用户在意）> 片源 > 编码 > 音频。
+ * Remux > HDR > 字幕 > 压制组（PT 用户在意）> 片源 > 编码 > 音频。
  * 影视类型不再入列——顶部的类型分段切换已表达同一信息，每行重复是纯冗余。
  * 标题串（release name）本身也完整携带这些属性，+N 悬停即见全部。
  */
@@ -2667,6 +2706,9 @@ function AttrBadges({ attrs }: { attrs: TorrentAttrs }) {
   if (attrs.resolution) chips.push({ text: attrs.resolution });
   if (attrs.remux) chips.push({ text: "Remux", cls: "text-[#9cc2ff]" });
   for (const v of attrs.hdr) chips.push({ text: v, cls: "text-[#c8a6ff]" });
+  for (const v of attrs.subtitle_languages ?? []) {
+    chips.push({ text: subtitleLanguageLabel(v), cls: "text-[#7ee2b8]" });
+  }
   if (attrs.release_group) chips.push({ text: attrs.release_group, cls: "text-[var(--accent)]" });
   if (attrs.media_source) chips.push({ text: attrs.media_source });
   if (attrs.video_codec) chips.push({ text: attrs.video_codec });
