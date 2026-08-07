@@ -45,6 +45,8 @@ export interface TorrentAttrs {
   remux: boolean;
   /** 音频编码：TrueHD / Atmos / DTS-HD MA / DDP ... */
   audio: string[];
+  /** 标题/副标题明确声明的字幕语言（BCP 47；当前可识别 zh-Hans） */
+  subtitle_languages: string[];
   release_group: string | null;
 }
 

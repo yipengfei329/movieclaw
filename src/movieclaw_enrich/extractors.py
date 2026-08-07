@@ -59,6 +59,34 @@ def extract_audio(text: str) -> dict[str, object]:
     return {"audio": hits} if hits else {}
 
 
+_NO_SUBTITLE_RE = re.compile(
+    r"(?:无|没有|不含)(?:内封|内嵌|外挂|中文|简体中文)?字幕|"
+    r"(?<![A-Za-z])NO[\s._-]*SUBS?(?![A-Za-z])",
+    re.I,
+)
+
+_SIMPLIFIED_CHINESE_SUBTITLE_RE = re.compile(
+    r"简(?:"
+    r"体(?:中文)?(?:特效)?字幕|"
+    r"中(?:特效)?字幕|"
+    r"繁中?英?字幕|"
+    r"英(?:双语|字幕)|"
+    r"(?:体(?:中文)?|中|繁|英)(?![A-Za-z0-9\u3400-\u9fff])"
+    r")|(?<![A-Za-z])(?:CHS|ZHS|ZH[-_]?HANS)(?![A-Za-z])",
+    re.I,
+)
+
+
+def extract_subtitle_languages(text: str) -> dict[str, object]:
+    """提取明确声明的字幕语言；「中字」等泛称不推断简繁，避免误筛。"""
+    # 明确的否定声明优先；同时禁止把「简体中文配音/音轨/简介」的前缀当字幕标记。
+    if _NO_SUBTITLE_RE.search(text):
+        return {}
+    if _SIMPLIFIED_CHINESE_SUBTITLE_RE.search(text):
+        return {"subtitle_languages": ["zh-Hans"]}
+    return {}
+
+
 def extract_hdr(text: str) -> dict[str, object]:
     hits = match_vocab(text.upper(), HDR_COMPILED, multi=True)
     return {"hdr": hits} if hits else {}
@@ -134,6 +162,7 @@ EXTRACTORS: list[tuple[str, object]] = [
     ("resolution", extract_resolution),
     ("video_codec", extract_video_codec),
     ("audio", extract_audio),
+    ("subtitle_languages", extract_subtitle_languages),
     ("hdr", extract_hdr),
     ("media_source", extract_media_source),
     ("remux", extract_remux),

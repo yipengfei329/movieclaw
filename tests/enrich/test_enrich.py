@@ -163,6 +163,38 @@ class TestChinesePT:
         assert a.release_group == "CHD"  # 词表归一 CHDBits → CHD
         assert "DDP" in a.audio
 
+    @pytest.mark.parametrize(
+        "marker",
+        ["简体中文字幕", "内封简中", "简繁英字幕", "简英双语", "CHS", "ZHS", "zh-Hans"],
+    )
+    def test_simplified_chinese_subtitle_markers(self, marker):
+        a = enrich(
+            "Obsession.2025.2160p.UHD.BluRay.x265-UBits",
+            f"痴迷 美版压制 {marker}",
+        )
+        assert a.subtitle_languages == ["zh-Hans"]
+
+    @pytest.mark.parametrize(
+        "marker",
+        [
+            "繁体字幕",
+            "繁中",
+            "CHT",
+            "中字",
+            "中文字幕",
+            "中英字幕",
+            "简体中文配音",
+            "简体音轨",
+            "简体中文语音",
+            "简体中文剧情简介",
+            "无字幕 简体",
+            "CHS NO SUBS",
+        ],
+    )
+    def test_ambiguous_or_traditional_subtitle_markers_are_not_simplified(self, marker):
+        a = enrich("Obsession.2025.1080p.WEB-DL.x265-GROUP", f"痴迷 {marker}")
+        assert a.subtitle_languages == []
+
 
 class TestAudioAndHDR:
     """音频与 HDR 的掩蔽/归一细节。"""

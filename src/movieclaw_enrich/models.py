@@ -50,4 +50,6 @@ class TorrentAttrs(BaseModel):
 
     # -- 音频与发布 ---------------------------------------------------------
     audio: list[str] = []              # 音频编码：TrueHD / Atmos / DTS-HD MA / DDP ...
+    # 字幕语言用 BCP 47 标签；只记录标题/副标题明确声明的语言，泛称「中字」不猜简繁
+    subtitle_languages: list[str] = []  # 当前识别 zh-Hans（简体中文）
     release_group: str | None = None   # 压制组/发布组
