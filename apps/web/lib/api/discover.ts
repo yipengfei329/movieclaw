@@ -2,6 +2,8 @@ import { request } from "@/lib/http";
 import { cachedImageUrl } from "@/lib/image-proxy";
 import type {
   DiscoverLayoutData,
+  MediaLibraryLink,
+  MediaLibraryStatus,
   MediaItem,
   MediaRowData,
   MediaType,
@@ -38,6 +40,19 @@ interface MediaCardDto {
   overview: string;
   poster_url: string;
   backdrop_url: string | null;
+  library_status?: MediaLibraryStatusDto | null;
+}
+
+interface MediaLibraryStatusDto {
+  media_item_id: number;
+  library_count: number;
+  file_count: number;
+}
+
+interface MediaLibraryLinkDto {
+  library_id: number;
+  library_name: string;
+  media_item_id: number;
 }
 
 interface MediaRowDto {
@@ -103,6 +118,7 @@ interface MediaDetailDto {
   backdrops: MediaImageDto[];
   posters: MediaImageDto[];
   related: MediaCardDto[];
+  library_links?: MediaLibraryLinkDto[];
 }
 
 function toItem(dto: MediaCardDto): MediaItem {
@@ -120,6 +136,25 @@ function toItem(dto: MediaCardDto): MediaItem {
     overview: dto.overview,
     posterUrl: cachedImageUrl(dto.poster_url),
     backdropUrl: dto.backdrop_url ? cachedImageUrl(dto.backdrop_url) : undefined,
+    libraryStatus: toLibraryStatus(dto.library_status),
+  };
+}
+
+/** 库存字段只在 API 边界完成 snake_case 到 camelCase 的转换。 */
+function toLibraryStatus(dto: MediaLibraryStatusDto | null | undefined): MediaLibraryStatus | null {
+  if (!dto) return null;
+  return {
+    mediaItemId: dto.media_item_id,
+    libraryCount: dto.library_count,
+    fileCount: dto.file_count,
+  };
+}
+
+function toLibraryLink(dto: MediaLibraryLinkDto): MediaLibraryLink {
+  return {
+    libraryId: dto.library_id,
+    libraryName: dto.library_name,
+    mediaItemId: dto.media_item_id,
   };
 }
 
@@ -278,6 +313,8 @@ export interface MediaDetailData {
   posters: MediaImage[];
   /** TMDB 推荐的相似作品 */
   related: MediaItem[];
+  /** 已入库时按后端稳定顺序返回的媒体库详情入口。 */
+  libraryLinks: MediaLibraryLink[];
 }
 
 function toImage(dto: MediaImageDto): MediaImage {
@@ -334,5 +371,6 @@ function toDetail(dto: MediaDetailDto): MediaDetailData {
     backdrops: dto.backdrops.map(toImage),
     posters: dto.posters.map(toImage),
     related: dto.related.map(toItem),
+    libraryLinks: (dto.library_links ?? []).map(toLibraryLink),
   };
 }

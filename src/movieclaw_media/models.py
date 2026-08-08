@@ -27,6 +27,27 @@ class MediaSource(StrEnum):
     DOUBAN = "douban"
 
 
+class MediaLibraryStatus(BaseModel):
+    """发现卡片对应的轻量库存摘要。
+
+    这是发现页与本地库存之间唯一共享的列表级契约：只表达是否存在在位
+    文件及其聚合数量，不携带文件路径、介质规格或探测 JSON，避免海报墙
+    查询扩大为逐条目明细读取。
+    """
+
+    media_item_id: int = Field(description="本地媒体条目 id，用于详情深链")
+    library_count: int = Field(description="包含在位文件的媒体库数量")
+    file_count: int = Field(description="在位文件数量")
+
+
+class MediaLibraryLink(BaseModel):
+    """发现详情跳转到一个本地媒体库条目所需的最小身份信息。"""
+
+    library_id: int = Field(description="媒体库 id")
+    library_name: str = Field(description="媒体库展示名称")
+    media_item_id: int = Field(description="本地媒体条目 id")
+
+
 class MediaCard(BaseModel):
     """一张海报卡片所需的全部字段（发现页列表项与 Hero 精选共用）。"""
 
@@ -49,6 +70,10 @@ class MediaCard(BaseModel):
     overview: str = Field(default="", description="剧情简介（可能为空：小众条目无中文简介）")
     poster_url: str
     backdrop_url: str | None = Field(default=None, description="宽幅剧照，Hero 大横幅用")
+    library_status: MediaLibraryStatus | None = Field(
+        default=None,
+        description="本地在位库存摘要；未精确命中或只有缺失台账时为 null",
+    )
 
 
 class MediaRow(BaseModel):
@@ -148,3 +173,7 @@ class MediaDetail(BaseModel):
         default_factory=list, description="海报（2:3 竖版，配置语言优先）"
     )
     related: list[MediaCard] = Field(default_factory=list, description="TMDB 推荐的相似作品")
+    library_links: list[MediaLibraryLink] = Field(
+        default_factory=list,
+        description="主条目可跳转的本地媒体库入口；相似推荐不带此字段",
+    )

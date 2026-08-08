@@ -47,6 +47,7 @@ import {
   transferLibraryItem,
 } from "@/lib/api/libraries";
 import { useBackdrop } from "@/lib/backdrop";
+import { getDiscoveryReturnPath } from "@/lib/discovery-return-path";
 import { formatBytes } from "@/lib/format";
 import { resolveRequestUrl } from "@/lib/http";
 import { cachedImageUrl } from "@/lib/image-proxy";
@@ -73,11 +74,14 @@ import { useVisiblePolling } from "@/lib/use-visible-polling";
 export function LibraryItemDetailView({
   libraryId,
   mediaItemId,
+  returnTo,
 }: {
   libraryId: number;
   mediaItemId: number;
+  returnTo?: string;
 }) {
   const router = useRouter();
+  const discoveryReturnPath = getDiscoveryReturnPath(returnTo);
   const [detail, setDetail] = useState<LibraryItemDetail | null>(null);
   const [library, setLibrary] = useState<MediaLibrary | null>(null);
   const [failed, setFailed] = useState(false);
@@ -147,11 +151,13 @@ export function LibraryItemDetailView({
   // 兜底态（加载中/失败）的顶栏：条目标题未知，末项留空——渲染 PageNav 是为了
   // 向外壳登记「本页自带顶栏」，否则移动端全局顶栏（☰ + logo）会先显示再消失，
   // 顶部闪一下；同时转圈期间就有返回键可点。祖先链路与正文的 trail 保持一致。
-  const fallbackTrail = [
-    { label: "媒体库", href: "/library" as Route },
-    { label: library?.name ?? "库存", href: `/library/${libraryId}` as Route },
-    { label: "" },
-  ];
+  const fallbackTrail = discoveryReturnPath
+    ? [{ label: "发现详情", href: discoveryReturnPath }, { label: "" }]
+    : [
+        { label: "媒体库", href: "/library" as Route },
+        { label: library?.name ?? "库存", href: `/library/${libraryId}` as Route },
+        { label: "" },
+      ];
 
   if (failed) {
     return (
@@ -199,11 +205,13 @@ export function LibraryItemDetailView({
       return probed ? Math.round(probed / 60) : null;
     })();
 
-  const trail = [
-    { label: "媒体库", href: "/library" as Route },
-    { label: library?.name ?? "库存", href: `/library/${libraryId}` as Route },
-    { label: detail.title },
-  ];
+  const trail = discoveryReturnPath
+    ? [{ label: "发现详情", href: discoveryReturnPath }, { label: detail.title }]
+    : [
+        { label: "媒体库", href: "/library" as Route },
+        { label: library?.name ?? "库存", href: `/library/${libraryId}` as Route },
+        { label: detail.title },
+      ];
 
   const runReidentify = async () => {
     setReidentifying(true);

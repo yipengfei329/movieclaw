@@ -572,6 +572,12 @@ function HeroSlide({
           <span>{item.year}</span>
           {item.genres.length > 0 && <span>{item.genres.join(" / ")}</span>}
           {item.extent && <span>{item.extent}</span>}
+          {item.libraryStatus && (
+            <span className="flex items-center gap-1.5 text-emerald-300/90">
+              <span className="size-1.5 rounded-full bg-emerald-400" />
+              在库
+            </span>
+          )}
           {item.badges.length > 0 && (
             <span className="flex gap-1.5">
               {item.badges.map((b) => (

@@ -12,13 +12,22 @@ export const metadata: Metadata = { title: "影片详情" };
  */
 export default async function LibraryItemDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string; mediaItemId: string }>;
+  searchParams: Promise<{ returnTo?: string | string[] }>;
 }) {
   const { id, mediaItemId } = await params;
+  const query = await searchParams;
+  // 重复参数不产生歧义的返回目标，按缺失参数处理并回退到媒体库父级。
+  const returnTo = typeof query.returnTo === "string" ? query.returnTo : undefined;
   return (
     <div className="flex h-full flex-col">
-      <LibraryItemDetailView libraryId={Number(id)} mediaItemId={Number(mediaItemId)} />
+      <LibraryItemDetailView
+        libraryId={Number(id)}
+        mediaItemId={Number(mediaItemId)}
+        returnTo={returnTo}
+      />
     </div>
   );
 }

@@ -9,6 +9,7 @@ import {
   CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  FolderIcon,
   PhotoIcon,
   BellIcon,
   SearchIcon,
@@ -28,6 +29,7 @@ import {
 } from "@/lib/api/discover";
 import { useSubscribeEntry } from "@/components/subscribe-entry";
 import { useBackdrop } from "@/lib/backdrop";
+import { buildDiscoveryReturnPath } from "@/lib/discovery-return-path";
 import { useDoubanAppHref } from "@/lib/douban-app-link";
 import { getMediaOrigin, getMediaSeed, useMediaDetail } from "@/lib/media-detail";
 import { usePageTitle } from "@/lib/use-page-title";
@@ -157,6 +159,9 @@ export function MediaDetailView({
 
   const info = detail?.info;
   const related = detail?.related ?? [];
+  const libraryLinks = detail?.libraryLinks ?? [];
+  // 发现详情路由是媒体库页可安全返回的唯一来源；不从标题或媒体库数据反推条目。
+  const libraryReturnTo = buildDiscoveryReturnPath(source, type ?? item.type, id);
 
   const isMovie = item.type === "movie";
   // 词条信息卡里是否还剩下至少一格（导演已上提到元信息行、主演已交给演职员条）
@@ -279,6 +284,27 @@ export function MediaDetailView({
               <SourceLink href={doubanAppHref ?? info.sourceUrl} label="豆瓣" />
             )}
           </div>
+
+          {/* 在库是详情状态，不与外部词条链接混在一起；每个链接保持后端给出的库顺序。 */}
+          {libraryLinks.length > 0 && (
+            <div className="mt-4 max-w-full max-md:mt-3">
+              <div className="inline-flex max-w-full flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-emerald-300/20 bg-emerald-400/[0.08] px-3.5 py-2.5 text-sub text-emerald-100/90 max-md:px-3">
+                <span className="flex shrink-0 items-center gap-1.5 font-medium text-emerald-200">
+                  <FolderIcon className="size-4" />
+                  在库
+                </span>
+                {libraryLinks.map((libraryLink) => (
+                  <Link
+                    key={`${libraryLink.libraryId}:${libraryLink.mediaItemId}`}
+                    href={`/library/${libraryLink.libraryId}/item/${libraryLink.mediaItemId}?returnTo=${encodeURIComponent(libraryReturnTo)}` as Route}
+                    className="min-w-0 max-w-full break-words font-medium text-emerald-100 underline decoration-emerald-200/45 underline-offset-4 transition-colors hover:text-white hover:decoration-emerald-100"
+                  >
+                    {libraryLink.libraryName}
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* 操作区：已订阅的影片主按钮变为状态展示（点击进入管理弹层可取消订阅） */}
           <div className="mt-5 flex flex-wrap items-center gap-3 max-md:mt-3.5 max-md:gap-2">

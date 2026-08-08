@@ -9,6 +9,20 @@
 export type MediaType = "movie" | "tv";
 export type MediaSource = "tmdb" | "douban";
 
+/** 发现列表的轻量库存摘要；只用于入库标记，不携带文件详情。 */
+export interface MediaLibraryStatus {
+  mediaItemId: number;
+  libraryCount: number;
+  fileCount: number;
+}
+
+/** 发现详情页跳转到已有媒体库条目所需的稳定身份。 */
+export interface MediaLibraryLink {
+  libraryId: number;
+  libraryName: string;
+  mediaItemId: number;
+}
+
 export interface MediaItem {
   /** TMDB 条目 ID（字符串形态，仅作不透明键使用） */
   id: string;
@@ -33,6 +47,8 @@ export interface MediaItem {
   posterUrl: string;
   /** 仅 Hero 精选项需要的宽幅背景图 */
   backdropUrl?: string;
+  /** 有在位文件时的库存摘要；无匹配或旧接口响应时为空。 */
+  libraryStatus?: MediaLibraryStatus | null;
 }
 
 /** 一行横滚海报的分类数据 */

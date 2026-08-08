@@ -9,7 +9,7 @@ import { BellIcon, CheckIcon, DownloadIcon, PlusIcon, StarIcon } from "@/compone
 import { PosterImage } from "@/components/poster-image";
 import { useSubscribeEntry } from "@/components/subscribe-entry";
 import { useMediaDetail } from "@/lib/media-detail";
-import type { MediaItem, MediaType } from "@/lib/media-types";
+import type { MediaItem, MediaLibraryStatus, MediaType } from "@/lib/media-types";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { useTapGuard } from "@/lib/use-tap-guard";
 
@@ -40,7 +40,7 @@ export interface PosterCardProps {
  * - follow：已在库的在播剧（还会有新集），给「订阅追新」入口；
  * - backfill：已在库的完结剧但已播集有缺口，给「补齐缺集」入口
  *   （订阅创建按 E−H 跳过库里已有的集，只为缺的集生成工单）；
- * - owned：已在媒体库且无后续动作（电影/完结齐全剧），静态「已入库」标识；
+ * - owned：已在媒体库且无后续动作（电影/完结齐全剧），静态「在库」标识；
  * - none：已订阅但尚未落地（单库页「追踪中」），再给订阅按钮是重复操作，不显示。
  *
  * 前三种都是订阅入口，仅文案/图标不同；该影片已存在订阅时自动切换为
@@ -75,6 +75,7 @@ export interface PosterVisualItem {
   extent?: string;
   badges?: string[];
   overview?: string;
+  libraryStatus?: MediaLibraryStatus | null;
 }
 
 export function PosterCard({ item, action, href }: PosterCardProps) {
@@ -233,21 +234,25 @@ function PosterCardContent({
         <p className="text-on-image truncate text-ui font-semibold text-[var(--text)]">
           {item.title}
         </p>
-        {/* year 用真值判断：媒体库条目缺失年份时以 0 占位，不应显示出来 */}
-        {(!!item.year || item.extent) && (
-          <p className="text-on-image tnum mt-0.5 truncate text-caption text-[var(--text-muted)]">
-            {item.year || ""}
-            {!!item.year && item.extent ? " · " : ""}
-            {item.extent}
-          </p>
-        )}
+        {/* 始终保留一行元信息，避免在库状态或缺失年份让同一海报墙的卡片高低跳动。 */}
+        <p className="text-on-image tnum mt-0.5 flex min-h-4 items-center gap-1.5 truncate text-caption text-[var(--text-muted)]">
+          {!!item.year && <span>{item.year}</span>}
+          {!!item.year && item.extent && <span>·</span>}
+          {item.extent && <span>{item.extent}</span>}
+          {item.libraryStatus && (
+            <span className="flex shrink-0 items-center gap-1.5 text-emerald-300/90">
+              <span className="size-1.5 rounded-full bg-emerald-400" />
+              在库
+            </span>
+          )}
+        </p>
       </div>
     </>
   );
 }
 
 /**
- * 信息层里的操作键（订阅 / 追新 / 补齐 / 已入库标识）。
+ * 信息层里的操作键（订阅 / 追新 / 补齐 / 在库标识）。
  *
  * 外层整卡已经是 button / Link，内部不能再嵌 button（HTML 不允许交互元素嵌套），
  * 所以用 role="button" 的 span 承载：preventDefault 拦掉 Link 跳转，
@@ -273,11 +278,11 @@ function PosterCardActionButton({
   const tapGuard = useTapGuard(trigger);
 
   if (!subscribeMeta) {
-    // 已入库标识：非交互，与库存格下方的绿点语言一致。
+    // 在库标识：非交互，与库存格下方的绿点语言一致。
     return (
       <span className="flex h-7 items-center gap-1.5 rounded-full bg-white/[0.18] px-3 text-caption font-semibold text-white/90">
         <span className="size-1.5 rounded-full bg-[#4ade80]" />
-        已入库
+        在库
       </span>
     );
   }
